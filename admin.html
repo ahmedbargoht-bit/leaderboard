@@ -49,7 +49,7 @@
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
   /* SETUP BANNER */
-  .setup-banner {
+  .setup-banner { display: none !important; } .setup-banner-HIDDEN {
     background: linear-gradient(135deg, #fff8e1, #fff3cd);
     border: 1px solid var(--gold-dark);
     border-radius: var(--radius);
@@ -372,7 +372,6 @@
   </div>
 </div>
 
-</div>
 
 <!-- STATS -->
 <div class="stats-grid">
@@ -559,8 +558,6 @@ window.onload = async () => {
     return; // Don't load data until authenticated
   }
   if (SHEET_URL) {
-    document.getElementById('setupBanner').style.display = 'none';
-    document.getElementById('sheetUrlInput').value = SHEET_URL;
     setStatus(true);
     await loadAll();
   } else {
