@@ -259,9 +259,89 @@
     align-items: center;
     gap: 8px;
   }
+
+  /* PIN LOCK */
+  .pin-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: #e8f4fd;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column;
+  }
+  .pin-box {
+    background: #ffffff;
+    border: 2px solid #c5e0f5;
+    border-radius: 20px;
+    padding: 40px 32px;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(21,101,192,0.12);
+    width: 320px;
+  }
+  .pin-box h2 { color: #b8860b; font-size: 1.4rem; margin-bottom: 6px; }
+  .pin-box p { color: #5a7a9a; font-size: 0.85rem; margin-bottom: 24px; }
+  .pin-dots { display: flex; justify-content: center; gap: 14px; margin-bottom: 28px; }
+  .pin-dot {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid #c5e0f5;
+    background: #e8f4fd;
+    transition: all 0.2s;
+  }
+  .pin-dot.filled { background: #b8860b; border-color: #b8860b; }
+  .pin-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 10px; margin-bottom: 16px;
+  }
+  .pin-btn {
+    background: #dceef9; border: 1px solid #c5e0f5;
+    border-radius: 12px; padding: 16px;
+    font-family: 'Cairo', sans-serif;
+    font-size: 1.3rem; font-weight: 700;
+    color: #1a2a3a; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .pin-btn:hover { background: #c5e0f5; transform: scale(1.05); }
+  .pin-btn:active { transform: scale(0.95); }
+  .pin-error { color: #c0392b; font-size: 0.85rem; margin-top: 8px; min-height: 20px; }
+  .pin-clear { background: none; border: none; color: #5a7a9a; font-family: 'Cairo', sans-serif; font-size: 0.85rem; cursor: pointer; margin-top: 8px; }
+
+  @keyframes shake {
+    0%,100%{transform:translateX(0)}
+    25%{transform:translateX(-8px)}
+    75%{transform:translateX(8px)}
+  }
+
 </style>
 </head>
 <body>
+
+
+<div class="pin-overlay" id="pinOverlay">
+  <div class="pin-box">
+    <div style="font-size:2.5rem;margin-bottom:12px">🔐</div>
+    <h2>لوحة التحكم</h2>
+    <p>أدخل الـ PIN للدخول</p>
+    <div class="pin-dots">
+      <div class="pin-dot" id="d0"></div>
+      <div class="pin-dot" id="d1"></div>
+      <div class="pin-dot" id="d2"></div>
+      <div class="pin-dot" id="d3"></div>
+    </div>
+    <div class="pin-grid">
+      <button class="pin-btn" onclick="pinPress('1')">1</button>
+      <button class="pin-btn" onclick="pinPress('2')">2</button>
+      <button class="pin-btn" onclick="pinPress('3')">3</button>
+      <button class="pin-btn" onclick="pinPress('4')">4</button>
+      <button class="pin-btn" onclick="pinPress('5')">5</button>
+      <button class="pin-btn" onclick="pinPress('6')">6</button>
+      <button class="pin-btn" onclick="pinPress('7')">7</button>
+      <button class="pin-btn" onclick="pinPress('8')">8</button>
+      <button class="pin-btn" onclick="pinPress('9')">9</button>
+      <button class="pin-btn pin-clear" onclick="pinClear()">مسح</button>
+      <button class="pin-btn" onclick="pinPress('0')">0</button>
+      <button class="pin-btn" onclick="pinDelete()">⌫</button>
+    </div>
+    <div class="pin-error" id="pinError"></div>
+  </div>
+</div>
 
 <div class="header">
   <div>
@@ -410,6 +490,47 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
+
+// ── PIN LOCK ──────────────────────────────────────────────
+const CORRECT_PIN = '1412';
+let pinValue = '';
+
+function pinPress(num) {
+  if (pinValue.length >= 4) return;
+  pinValue += num;
+  updateDots();
+  if (pinValue.length === 4) checkPin();
+}
+function pinDelete() {
+  pinValue = pinValue.slice(0, -1);
+  updateDots();
+  document.getElementById('pinError').textContent = '';
+}
+function pinClear() {
+  pinValue = '';
+  updateDots();
+  document.getElementById('pinError').textContent = '';
+}
+function updateDots() {
+  for (let i = 0; i < 4; i++) {
+    document.getElementById('d' + i).classList.toggle('filled', i < pinValue.length);
+  }
+}
+function checkPin() {
+  if (pinValue === CORRECT_PIN) {
+    sessionStorage.setItem('adminAuth', '1');
+    document.getElementById('pinOverlay').style.display = 'none';
+  } else {
+    document.getElementById('pinError').textContent = '❌ PIN غلط، حاول تاني';
+    pinValue = '';
+    updateDots();
+    // Shake animation
+    const box = document.querySelector('.pin-box');
+    box.style.animation = 'shake 0.3s ease';
+    setTimeout(() => box.style.animation = '', 300);
+  }
+}
+
 // ============================================================
 // CONFIG — يتحدد من localStorage بعد إدخال الـ URL
 // ============================================================
@@ -421,6 +542,12 @@ let appData = { reps: [], groups: [], settings: {}, log: [] };
 // INIT
 // ============================================================
 window.onload = async () => {
+  // Check PIN auth
+  if (sessionStorage.getItem('adminAuth') !== '1') {
+    document.getElementById('pinOverlay').style.display = 'flex';
+  } else {
+    document.getElementById('pinOverlay').style.display = 'none';
+  }
   if (SHEET_URL) {
     document.getElementById('setupBanner').style.display = 'none';
     document.getElementById('sheetUrlInput').value = SHEET_URL;
