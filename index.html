@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>الطحان جولدن داتس</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #06060e;
+    color: #e8e0cc;
+    font-family: 'Cairo', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .container { text-align: center; padding: 40px 20px; }
+  .logo { font-size: 3rem; margin-bottom: 16px; }
+  h1 { font-size: 1.6rem; font-weight: 900; color: #c9a84c; margin-bottom: 8px; }
+  p { color: #857862; margin-bottom: 40px; font-size: 0.9rem; }
+  .btns { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: block;
+    padding: 18px 36px;
+    border-radius: 14px;
+    font-family: 'Cairo', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 900;
+    text-decoration: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .btn-leader {
+    background: linear-gradient(135deg, #8a6a1a, #c9a84c);
+    color: #000;
+  }
+  .btn-admin {
+    background: #1a1a26;
+    border: 1px solid #c9a84c;
+    color: #c9a84c;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">🏆</div>
+  <h1>الطحان جولدن داتس</h1>
+  <p>ليدر بورد المبيعات — مودرن تريد</p>
+  <div class="btns">
+    <a href="leaderboard.html" class="btn btn-leader">🏆 ليدر بورد الفريق</a>
+    <a href="admin.html" class="btn btn-admin">⚙️ لوحة التحكم</a>
+  </div>
+</div>
+</body>
+</html>
