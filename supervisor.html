@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>بوابة المشرف – الطحان جولدن داتس</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --gold:#b8860b;--gold-dark:#8a6200;
+  --bg:#e8f4fd;--white:#ffffff;--bg2:#dceef9;--bg3:#c5e0f5;
+  --text:#1a2a3a;--dim:#5a7a9a;
+  --green:#1a7a4a;--red:#c0392b;--blue:#1565c0;--orange:#e67e22;
+  --r:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Cairo',sans-serif;min-height:100vh}
+
+/* LOGIN */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.login-box{background:var(--white);border:2px solid var(--bg3);border-radius:20px;padding:40px 32px;width:340px;text-align:center;box-shadow:0 8px 32px rgba(21,101,192,.12)}
+.login-box .logo{font-size:2.5rem;margin-bottom:10px}
+.login-box h2{color:var(--gold);font-size:1.3rem;margin-bottom:4px}
+.login-box p{color:var(--dim);font-size:.83rem;margin-bottom:24px}
+.login-box select,.login-box input{width:100%;background:var(--bg2);border:1px solid var(--bg3);border-radius:10px;padding:11px 14px;color:var(--text);font-family:'Cairo',sans-serif;font-size:.9rem;margin-bottom:12px;transition:border-color .2s}
+.login-box select:focus,.login-box input:focus{outline:none;border-color:var(--gold)}
+.login-btn{width:100%;background:linear-gradient(135deg,var(--gold-dark),var(--gold));color:#fff;border:none;border-radius:10px;padding:12px;font-family:'Cairo',sans-serif;font-weight:900;font-size:1rem;cursor:pointer;transition:all .2s;margin-top:4px}
+.login-btn:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(184,134,11,.3)}
+.login-err{color:var(--red);font-size:.83rem;margin-top:8px;min-height:20px}
+
+/* HEADER */
+.header{background:linear-gradient(135deg,var(--white),var(--bg2));border-bottom:2px solid var(--gold-dark);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,.1)}
+.header h1{font-size:1.1rem;font-weight:900;color:var(--gold)}
+.header .sub{font-size:.75rem;color:var(--dim);margin-top:2px}
+.logout-btn{background:var(--bg2);border:1px solid var(--bg3);border-radius:8px;padding:7px 14px;font-family:'Cairo',sans-serif;font-size:.82rem;font-weight:700;color:var(--dim);cursor:pointer;transition:all .2s}
+.logout-btn:hover{border-color:var(--red);color:var(--red)}
+
+/* STATS */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;padding:16px}
+.stat{background:var(--white);border:1px solid var(--bg3);border-radius:var(--r);padding:14px;text-align:center}
+.stat .v{font-size:1.4rem;font-weight:900;color:var(--gold)}
+.stat .l{font-size:.72rem;color:var(--dim);margin-top:3px}
+
+/* TABS */
+.tabs{display:flex;gap:2px;padding:0 16px;border-bottom:2px solid var(--bg3);overflow-x:auto;background:var(--white)}
+.tab{padding:10px 16px;font-family:'Cairo',sans-serif;font-size:.83rem;font-weight:700;color:var(--dim);background:none;border:none;border-bottom:3px solid transparent;cursor:pointer;transition:all .2s;white-space:nowrap;margin-bottom:-2px}
+.tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+
+/* SECTIONS */
+.sec{display:none;padding:16px}
+.sec.active{display:block}
+
+/* CARD */
+.card{background:var(--white);border:1px solid var(--bg3);border-radius:var(--r);padding:18px;margin-bottom:14px}
+.card h3{color:var(--gold);font-size:.95rem;margin-bottom:14px}
+
+/* REP CARD */
+.rep-card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--r);padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;transition:all .3s}
+.rep-card:hover{border-color:var(--gold-dark)}
+.rank{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:.95rem;flex-shrink:0;background:var(--bg3);color:var(--dim)}
+.rank.r1{background:linear-gradient(135deg,#b8860b,#ffd700);color:#000}
+.rank.r2{background:linear-gradient(135deg,#555,#aaa);color:#000}
+.rank.r3{background:linear-gradient(135deg,#6b3a1f,#cd7f32);color:#fff}
+.rep-info{flex:1;min-width:0}
+.rep-name{font-size:.95rem;font-weight:700;margin-bottom:2px}
+.rep-role{font-size:.72rem;color:var(--dim);margin-bottom:5px}
+.pb{background:var(--bg3);border-radius:6px;height:5px;overflow:hidden;margin-top:3px}
+.pf{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--gold-dark),var(--gold));transition:width .5s}
+.pf.over{background:linear-gradient(90deg,#1a5a35,var(--green))}
+.rep-nums{text-align:left;flex-shrink:0}
+.rep-ach{font-size:1rem;font-weight:900;color:var(--gold)}
+.rep-pct{font-size:.78rem;margin-top:2px}
+.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:.73rem;font-weight:700}
+.badge.g{background:rgba(26,122,74,.12);color:var(--green)}
+.badge.r{background:rgba(192,57,43,.12);color:var(--red)}
+.badge.o{background:rgba(230,126,34,.12);color:var(--orange)}
+.badge.b{background:rgba(21,101,192,.12);color:var(--blue)}
+.badge.gold{background:rgba(184,134,11,.12);color:var(--gold)}
+
+/* COMM TABLE */
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.83rem}
+th{background:var(--bg2);color:var(--gold);padding:9px 11px;text-align:right;font-weight:700}
+td{padding:9px 11px;border-bottom:1px solid var(--bg3);color:var(--text)}
+
+/* MY COMM */
+.my-comm-card{background:linear-gradient(135deg,#fff8e1,#fff3cd);border:2px solid var(--gold-dark);border-radius:16px;padding:24px;text-align:center;margin-bottom:16px}
+.my-comm-card .total{font-size:2rem;font-weight:900;color:var(--gold-dark);margin:10px 0}
+.my-comm-card .breakdown{display:flex;justify-content:center;gap:20px;flex-wrap:wrap;margin-top:12px}
+.my-comm-card .item{text-align:center}
+.my-comm-card .item .val{font-size:1.1rem;font-weight:900;color:var(--text)}
+.my-comm-card .item .lbl{font-size:.72rem;color:var(--dim)}
+
+.toast-c{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:999}
+.toast{background:var(--white);border:1px solid var(--gold-dark);border-radius:10px;padding:10px 20px;font-size:.85rem;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,.12);animation:su .3s;margin-top:7px;text-align:center}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red)}
+@keyframes su{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN PAGE -->
+<div class="login-wrap" id="loginPage">
+  <div class="login-box">
+    <div class="logo">👔</div>
+    <h2>بوابة المشرف</h2>
+    <p>الطحان جولدن داتس — مودرن تريد</p>
+    <select id="supSelect">
+      <option value="">اختر اسمك...</option>
+    </select>
+    <input type="password" id="supPass" placeholder="الباسورد" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <button class="login-btn" onclick="doLogin()">🔐 دخول</button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashboard" style="display:none">
+  <div class="header">
+    <div>
+      <div class="header h1" id="supName" style="font-size:1.1rem;font-weight:900;color:var(--gold)">👔 لوحة المشرف</div>
+      <div class="sub" id="supRole">الطحان جولدن داتس</div>
+    </div>
+    <button class="logout-btn" onclick="doLogout()">🚪 خروج</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v" id="sTotal">-</div><div class="l">إجمالي المجموعة</div></div>
+    <div class="stat"><div class="v" id="sPct">-</div><div class="l">نسبة التحقيق</div></div>
+    <div class="stat"><div class="v" id="sOver">-</div><div class="l">تجاوزوا الهدف 🏆</div></div>
+    <div class="stat"><div class="v" id="sReps">-</div><div class="l">عدد المناديب</div></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="ST('leaderboard',this)">🏆 الليدر بورد</button>
+    <button class="tab" onclick="ST('mycomm',this)">💰 عمولتي</button>
+    <button class="tab" onclick="ST('teamcomm',this)">👥 عمولة الفريق</button>
+  </div>
+
+  <!-- LEADERBOARD TAB -->
+  <div class="sec active" id="tab-leaderboard">
+    <div id="repsList"></div>
+  </div>
+
+  <!-- MY COMMISSION TAB -->
+  <div class="sec" id="tab-mycomm">
+    <div class="my-comm-card">
+      <div style="font-size:.9rem;color:var(--dim)">إجمالي عمولتك هذا الشهر</div>
+      <div class="total" id="myTotalComm">- ج</div>
+      <div class="breakdown">
+        <div class="item"><div class="val" id="myTargetComm">-</div><div class="lbl">عمولة التارجت</div></div>
+        <div class="item"><div class="val" id="myKpiColl">-</div><div class="lbl">KPI تحصيل</div></div>
+        <div class="item"><div class="val" id="myKpiAtt">-</div><div class="lbl">KPI حضور</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>📊 تفاصيل عمولتك</h3>
+      <div id="myCommDetails"></div>
+    </div>
+  </div>
+
+  <!-- TEAM COMMISSION TAB -->
+  <div class="sec" id="tab-teamcomm">
+    <div class="card">
+      <h3>👥 عمولة الفريق</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>المندوب</th><th>الوظيفة</th><th>نسبة التحقيق</th><th>عمولة التارجت</th><th>KPI تحصيل</th><th>KPI حضور</th><th>الإجمالي</th></tr></thead>
+          <tbody id="teamCommTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-c" id="toastC"></div>
+
+<script>
+const SHEET = 'https://script.google.com/macros/s/AKfycbxZd02dr7jh4ZliLrU_LFsmvvGQSnh13rPTCDB6bvw9IP3ozSPXJZ2I_d09rPNu9oHF9g/exec';
+const COMM_RATES = {
+  'مدير بيع':     {target:9000,kpiCollection:1500,kpiAttendance:1500},
+  'مشرف مبيعات': {target:6500,kpiCollection:1000,kpiAttendance:500},
+  'مشرف بيع':    {target:6500,kpiCollection:1000,kpiAttendance:500},
+  'مندوب بيع':   {target:4500,kpiCollection:1000,kpiAttendance:500},
+  'مندوب تسليم': {target:3500,kpiCollection:1000,kpiAttendance:500},
+};
+
+let D = {};
+let currentSup = null;
+
+// ── INIT ─────────────────────────────────────────────────
+window.onload = async () => {
+  await loadData();
+  populateSupSelect();
+  // Check session
+  const saved = sessionStorage.getItem('supAuth');
+  if(saved) {
+    currentSup = JSON.parse(saved);
+    showDashboard();
+  }
+};
+
+async function loadData() {
+  try {
+    const r = await fetch(SHEET+'?action=getData',{redirect:'follow'});
+    const text = await r.text();
+    try { D = JSON.parse(text); } catch(e) { console.error('Parse error:', text); return; }
+    D.supervisors = D.supervisors||[];
+    D.reps = D.reps||[];
+    console.log('Supervisors loaded:', D.supervisors.length, D.supervisors);
+  } catch(e) { console.error('Fetch error:', e); }
+}
+
+function populateSupSelect() {
+  const sel = document.getElementById('supSelect');
+  sel.innerHTML = '<option value="">اختر اسمك...</option>';
+  (D.supervisors||[]).forEach(s => {
+    const o = document.createElement('option');
+    o.value = s.id; o.textContent = s.name;
+    sel.appendChild(o);
+  });
+}
+
+// ── LOGIN ─────────────────────────────────────────────────
+function doLogin() {
+  const id = document.getElementById('supSelect').value;
+  const pass = document.getElementById('supPass').value;
+  if(!id){document.getElementById('loginErr').textContent='اختر اسمك';return;}
+  if(!pass){document.getElementById('loginErr').textContent='أدخل الباسورد';return;}
+  const sup = (D.supervisors||[]).find(s=>s.id===id);
+  if(!sup){document.getElementById('loginErr').textContent='خطأ في البيانات';return;}
+  if(sup.password !== pass){document.getElementById('loginErr').textContent='❌ باسورد غلط';return;}
+  currentSup = sup;
+  sessionStorage.setItem('supAuth', JSON.stringify(sup));
+  showDashboard();
+}
+
+function doLogout() {
+  sessionStorage.removeItem('supAuth');
+  currentSup = null;
+  document.getElementById('loginPage').style.display='flex';
+  document.getElementById('dashboard').style.display='none';
+  document.getElementById('supPass').value='';
+  document.getElementById('loginErr').textContent='';
+}
+
+function showDashboard() {
+  document.getElementById('loginPage').style.display='none';
+  document.getElementById('dashboard').style.display='block';
+  document.getElementById('supName').textContent='👔 '+currentSup.name;
+  document.getElementById('supRole').textContent=currentSup.role||'مشرف';
+  renderDashboard();
+}
+
+// ── RENDER ─────────────────────────────────────────────────
+function fmt(n){return new Intl.NumberFormat('en-US').format(Number(n||0));}
+function pct(a,t){if(!t||t==0)return 0;return Math.round((a/t)*100);}
+
+function getMyReps() {
+  if(!currentSup) return [];
+  // Get rep IDs assigned to this supervisor
+  const myRepIds = (currentSup.repIds||'').split(',').filter(Boolean);
+  return D.reps.filter(r => myRepIds.includes(String(r.id)));
+}
+
+function renderDashboard() {
+  const myReps = getMyReps();
+  const totAch = myReps.reduce((s,r)=>s+Number(r.achieved||0),0);
+  const totTgt = myReps.reduce((s,r)=>s+Number(r.target||0),0);
+  const over = myReps.filter(r=>Number(r.achieved||0)>=Number(r.target||0)).length;
+
+  document.getElementById('sTotal').textContent = fmt(totAch)+' ج';
+  document.getElementById('sPct').textContent = pct(totAch,totTgt)+'%';
+  document.getElementById('sOver').textContent = over;
+  document.getElementById('sReps').textContent = myReps.length;
+
+  renderLeaderboard(myReps);
+  renderMyComm();
+  renderTeamComm(myReps);
+}
+
+function renderLeaderboard(reps) {
+  const sorted = [...reps].sort((a,b)=>Number(b.achieved||0)-Number(a.achieved||0));
+  const el = document.getElementById('repsList');
+  if(!sorted.length){el.innerHTML='<div style="text-align:center;padding:40px;color:var(--dim)">لا يوجد مناديب مرتبطون بك</div>';return;}
+  el.innerHTML = sorted.map((r,i)=>{
+    const p = pct(r.achieved,r.target);
+    const rankCls = i===0?'r1':i===1?'r2':i===2?'r3':'';
+    const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1;
+    const pctCls = p>=100?'g':p>=80?'b':p>=70?'o':'r';
+    return `<div class="rep-card">
+      <div class="rank ${rankCls}">${medal}</div>
+      <div class="rep-info">
+        <div class="rep-name">${r.name}</div>
+        <div class="rep-role">${r.role||'مندوب بيع'}</div>
+        <div class="pb"><div class="pf${p>=100?' over':''}" style="width:${Math.min(p,100)}%"></div></div>
+      </div>
+      <div class="rep-nums">
+        <div class="rep-ach">${fmt(r.achieved)} ج</div>
+        <div class="rep-pct"><span class="badge ${pctCls}">${p}%</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function calcComm(rep) {
+  const role = rep.role||'مندوب بيع';
+  const rates = COMM_RATES[role]||COMM_RATES['مندوب بيع'];
+  const p = rep.target>0?(rep.achieved/rep.target)*100:0;
+  const targetComm = p<80?0:Math.round((p/100)*rates.target);
+  const kpiColl = Number(rep.kpiCollection||0);
+  const kpiAtt = Number(rep.kpiAttendance||0);
+  return {targetComm, kpiColl, kpiAtt, total:targetComm+kpiColl+kpiAtt, p:Math.round(p), rates};
+}
+
+function renderMyComm() {
+  // Find supervisor as a rep (if they have a rep entry)
+  const myRep = D.reps.find(r=>r.name===currentSup.name);
+  if(!myRep){
+    document.getElementById('myTotalComm').textContent='—';
+    document.getElementById('myTargetComm').textContent='—';
+    document.getElementById('myKpiColl').textContent='—';
+    document.getElementById('myKpiAtt').textContent='—';
+    document.getElementById('myCommDetails').innerHTML='<div style="color:var(--dim);font-size:.83rem">لم يتم ربط حسابك بمندوب — تواصل مع الأدمن</div>';
+    return;
+  }
+  const c = calcComm(myRep);
+  const p = c.p;
+  document.getElementById('myTotalComm').textContent = fmt(c.total)+' ج';
+  document.getElementById('myTargetComm').textContent = fmt(c.targetComm)+' ج';
+  document.getElementById('myKpiColl').textContent = fmt(c.kpiColl)+' ج';
+  document.getElementById('myKpiAtt').textContent = fmt(c.kpiAtt)+' ج';
+  document.getElementById('myCommDetails').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;justify-content:space-between;padding:10px;background:var(--bg2);border-radius:8px">
+        <span>نسبة التحقيق</span>
+        <span class="badge ${p>=100?'g':p>=80?'b':'r'}">${p}%</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:10px;background:var(--bg2);border-radius:8px">
+        <span>عمولة التارجت (${fmt(c.rates.target)} ج كاملة)</span>
+        <span style="font-weight:700">${fmt(c.targetComm)} ج ${p<80?"(أقل من 80%)":""}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:10px;background:var(--bg2);border-radius:8px">
+        <span>KPI تحصيل (أقصى ${fmt(c.rates.kpiCollection)} ج)</span>
+        <span style="font-weight:700;color:var(--blue)">${fmt(c.kpiColl)} ج</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:10px;background:var(--bg2);border-radius:8px">
+        <span>KPI حضور والتزام (أقصى ${fmt(c.rates.kpiAttendance)} ج)</span>
+        <span style="font-weight:700;color:var(--blue)">${fmt(c.kpiAtt)} ج</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:12px 14px;background:linear-gradient(135deg,#fff8e1,#fff3cd);border:1px solid var(--gold-dark);border-radius:10px">
+        <span style="font-weight:900">الإجمالي</span>
+        <span style="font-weight:900;font-size:1.1rem;color:var(--gold-dark)">${fmt(c.total)} ج</span>
+      </div>
+    </div>`;
+}
+
+function renderTeamComm(reps) {
+  const tb = document.getElementById('teamCommTable');
+  if(!reps.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--dim)">لا يوجد مناديب</td></tr>';return;}
+  let teamTotal = 0;
+  tb.innerHTML = reps.map(r=>{
+    const c = calcComm(r);
+    teamTotal += c.total;
+    return `<tr>
+      <td><strong>${r.name}</strong></td>
+      <td>${r.role||'مندوب بيع'}</td>
+      <td><span class="badge">${c.p}%</span></td>
+      <td style="font-weight:700">${fmt(c.targetComm)} ج</td>
+      <td>${fmt(c.kpiColl)} ج</td>
+      <td>${fmt(c.kpiAtt)} ج</td>
+      <td style="font-weight:900;color:var(--gold)">${fmt(c.total)} ج</td>
+    </tr>`;
+  }).join('');
+  tb.innerHTML += `<tr style="background:var(--bg2)">
+    <td colspan="6" style="font-weight:900;color:var(--gold)">إجمالي الفريق</td>
+    <td style="font-weight:900;color:var(--gold);font-size:1rem">${fmt(teamTotal)} ج</td>
+  </tr>`;
+}
+
+function ST(name,btn){
+  document.querySelectorAll('.sec').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  btn.classList.add('active');
+}
+
+function toast(msg,type=''){
+  const c=document.getElementById('toastC');
+  const t=document.createElement('div');
+  t.className='toast '+type;t.textContent=msg;
+  c.appendChild(t);setTimeout(()=>t.remove(),3000);
+}
+</script>
+</body>
+</html>
