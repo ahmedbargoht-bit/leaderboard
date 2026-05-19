@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>لوحة التحكم – الطحان جولدن داتس</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --gold: #b8860b; --gold-light: #d4a017; --gold-dark: #8a6200;
+  --bg: #e8f4fd; --white: #ffffff; --bg2: #dceef9; --bg3: #c5e0f5;
+  --text: #1a2a3a; --dim: #5a7a9a;
+  --green: #1a7a4a; --red: #c0392b; --blue: #1565c0;
+  --orange: #e67e22; --purple: #7b2d8b;
+  --r: 12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Cairo',sans-serif;min-height:100vh}
+
+/* HEADER */
+.header{background:linear-gradient(135deg,var(--white),var(--bg2));border-bottom:2px solid var(--gold-dark);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,.1)}
+.header h1{font-size:1.2rem;font-weight:900;color:var(--gold)}
+.header .sub{font-size:.75rem;color:var(--dim);margin-top:2px}
+.status{display:flex;align-items:center;gap:6px;font-size:.8rem}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--red);animation:pulse 2s infinite}
+.dot.on{background:var(--green)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* STATS */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;padding:16px}
+.stat{background:var(--white);border:1px solid var(--bg3);border-radius:var(--r);padding:14px;text-align:center}
+.stat .v{font-size:1.4rem;font-weight:900;color:var(--gold)}
+.stat .l{font-size:.72rem;color:var(--dim);margin-top:3px}
+
+/* DAYS COUNTER */
+.days-bar{background:var(--white);border:1px solid var(--bg3);border-radius:var(--r);margin:0 16px 12px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.days-bar .item{text-align:center}
+.days-bar .item .n{font-size:1.5rem;font-weight:900;color:var(--blue)}
+.days-bar .item .t{font-size:.72rem;color:var(--dim)}
+.days-progress{flex:1;min-width:120px}
+.days-progress .lbl{display:flex;justify-content:space-between;font-size:.75rem;color:var(--dim);margin-bottom:5px}
+.days-progress .bar{background:var(--bg3);border-radius:8px;height:8px;overflow:hidden}
+.days-progress .fill{height:100%;border-radius:8px;background:linear-gradient(90deg,var(--gold-dark),var(--gold));transition:width .5s}
+
+/* TABS */
+.tabs{display:flex;gap:2px;padding:0 16px;border-bottom:2px solid var(--bg3);overflow-x:auto;background:var(--white)}
+.tab{padding:10px 14px;font-family:'Cairo',sans-serif;font-size:.8rem;font-weight:700;color:var(--dim);background:none;border:none;border-bottom:3px solid transparent;cursor:pointer;transition:all .2s;white-space:nowrap;margin-bottom:-2px}
+.tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+.tab:hover{color:var(--text)}
+
+/* SECTIONS */
+.sec{display:none;padding:16px}
+.sec.active{display:block}
+
+/* CARD */
+.card{background:var(--white);border:1px solid var(--bg3);border-radius:var(--r);padding:18px;margin-bottom:14px}
+.card h3{color:var(--gold);font-size:.95rem;margin-bottom:14px;display:flex;align-items:center;gap:6px}
+
+/* FORM */
+.fr{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:flex-end}
+.fg{display:flex;flex-direction:column;gap:5px;flex:1;min-width:130px}
+.fg label{font-size:.78rem;color:var(--dim)}
+.fg input,.fg select,.fg textarea{background:var(--bg2);border:1px solid var(--bg3);border-radius:8px;padding:9px 11px;color:var(--text);font-family:'Cairo',sans-serif;font-size:.88rem;transition:border-color .2s}
+.fg input:focus,.fg select:focus{outline:none;border-color:var(--gold)}
+.fg select option{background:var(--white)}
+
+/* BUTTON */
+.btn{background:linear-gradient(135deg,var(--gold-dark),var(--gold));color:var(--white);border:none;border-radius:8px;padding:9px 18px;font-family:'Cairo',sans-serif;font-weight:700;font-size:.88rem;cursor:pointer;transition:all .2s;white-space:nowrap}
+.btn:hover{transform:translateY(-1px);box-shadow:0 3px 10px rgba(184,134,11,.3)}
+.btn.sm{padding:5px 11px;font-size:.78rem}
+.btn.red{background:linear-gradient(135deg,#8a1a1a,var(--red));color:#fff}
+.btn.grn{background:linear-gradient(135deg,#1a5a35,var(--green));color:#fff}
+.btn.blu{background:linear-gradient(135deg,#0d3b6e,var(--blue));color:#fff}
+.btn.org{background:linear-gradient(135deg,#a04000,var(--orange));color:#fff}
+.btn.pur{background:linear-gradient(135deg,#4a1a5a,var(--purple));color:#fff}
+.btn.sec{background:var(--bg2);color:var(--text);border:1px solid var(--bg3)}
+
+/* TABLE */
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.83rem}
+th{background:var(--bg2);color:var(--gold);padding:9px 11px;text-align:right;font-weight:700}
+td{padding:9px 11px;border-bottom:1px solid var(--bg3);color:var(--text)}
+tr:hover td{background:rgba(21,101,192,.03)}
+.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:.73rem;font-weight:700}
+.badge.g{background:rgba(26,122,74,.12);color:var(--green)}
+.badge.r{background:rgba(192,57,43,.12);color:var(--red)}
+.badge.o{background:rgba(230,126,34,.12);color:var(--orange)}
+.badge.b{background:rgba(21,101,192,.12);color:var(--blue)}
+.badge.gold{background:rgba(184,134,11,.12);color:var(--gold)}
+
+/* PROGRESS */
+.pb{background:var(--bg3);border-radius:6px;height:5px;overflow:hidden;margin-top:3px}
+.pf{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--gold-dark),var(--gold));transition:width .5s}
+.pf.over{background:linear-gradient(90deg,#1a5a35,var(--green))}
+
+/* LOG */
+.log-item{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border-radius:8px;margin-bottom:7px;font-size:.83rem}
+.log-item .amt{color:var(--green);font-weight:700}
+.log-item .meta{color:var(--dim);font-size:.73rem}
+
+/* WHATSAPP BTN */
+.wa-btn{background:linear-gradient(135deg,#075e54,#25d366);color:#fff;border:none;border-radius:10px;padding:13px 24px;font-family:'Cairo',sans-serif;font-weight:900;font-size:1rem;cursor:pointer;display:flex;align-items:center;gap:10px;margin:0 auto;transition:all .2s}
+.wa-btn:hover{transform:translateY(-2px);box-shadow:0 5px 16px rgba(37,211,102,.3)}
+
+/* COMPETITION */
+.comp-card{background:var(--white);border:2px solid var(--bg3);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.comp-card.gold-border{border-color:var(--gold)}
+.comp-card.green-border{border-color:var(--green)}
+.comp-card .comp-title{font-size:1rem;font-weight:900;margin-bottom:6px}
+.comp-card .comp-sub{font-size:.8rem;color:var(--dim);margin-bottom:12px}
+.eligibility-item{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:.83rem}
+.eligibility-item.yes{background:rgba(26,122,74,.08);border:1px solid rgba(26,122,74,.2)}
+.eligibility-item.no{background:rgba(192,57,43,.08);border:1px solid rgba(192,57,43,.2)}
+.eligibility-item.warn{background:rgba(230,126,34,.08);border:1px solid rgba(230,126,34,.2)}
+
+/* HOLIDAY */
+.holiday-item{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border-radius:8px;margin-bottom:7px;font-size:.83rem}
+
+/* SECTOR */
+.sector-card{background:linear-gradient(135deg,var(--white),var(--bg2));border:2px solid var(--gold-dark);border-radius:var(--r);padding:16px;margin-bottom:14px}
+.sector-card h4{font-size:1rem;font-weight:900;color:var(--gold);margin-bottom:10px}
+
+/* TOAST */
+.toasts{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:999}
+.toast{background:var(--white);border:1px solid var(--gold-dark);border-radius:10px;padding:11px 22px;color:var(--text);font-size:.88rem;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,.12);animation:su .3s ease;margin-top:7px;text-align:center}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red)}
+@keyframes su{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+
+/* PIN */
+.pin-overlay{position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center}
+.pin-box{background:var(--white);border:2px solid var(--bg3);border-radius:20px;padding:36px 28px;text-align:center;box-shadow:0 8px 32px rgba(21,101,192,.12);width:300px}
+.pin-box h2{color:var(--gold);font-size:1.3rem;margin-bottom:5px}
+.pin-box p{color:var(--dim);font-size:.83rem;margin-bottom:20px}
+.pin-dots{display:flex;justify-content:center;gap:12px;margin-bottom:24px}
+.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--bg3);background:var(--bg);transition:all .2s}
+.pin-dot.filled{background:var(--gold);border-color:var(--gold)}
+.pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:12px}
+.pin-btn{background:var(--bg2);border:1px solid var(--bg3);border-radius:10px;padding:14px;font-family:'Cairo',sans-serif;font-size:1.2rem;font-weight:700;color:var(--text);cursor:pointer;transition:all .15s}
+.pin-btn:hover{background:var(--bg3);transform:scale(1.05)}
+.pin-btn:active{transform:scale(.95)}
+.pin-clr{background:none;border:none;color:var(--dim);font-family:'Cairo',sans-serif;font-size:.82rem;cursor:pointer;margin-top:5px}
+.pin-err{color:var(--red);font-size:.82rem;margin-top:7px;min-height:18px}
+.locked .header,.locked .stats,.locked .days-bar,.locked .tabs,.locked .sec,.locked .toasts{display:none!important}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
+
+@media(max-width:600px){.stats{grid-template-columns:repeat(2,1fr)}.fr{flex-direction:column}.fr .btn{width:100%}}
+</style>
+</head>
+<body>
+
+<!-- PIN -->
+<script>
+document.addEventListener('DOMContentLoaded',()=>{
+  if(sessionStorage.getItem('adminAuth')!=='1'){
+    document.body.classList.add('locked');
+    document.getElementById('pinOverlay').style.display='flex';
+  }else{
+    document.getElementById('pinOverlay').style.display='none';
+  }
+});
+</script>
+
+<div class="pin-overlay" id="pinOverlay" style="display:none">
+  <div class="pin-box">
+    <div style="font-size:2.2rem;margin-bottom:10px">🔐</div>
+    <h2>لوحة التحكم</h2>
+    <p>أدخل الـ PIN للدخول</p>
+    <div class="pin-dots">
+      <div class="pin-dot" id="d0"></div><div class="pin-dot" id="d1"></div>
+      <div class="pin-dot" id="d2"></div><div class="pin-dot" id="d3"></div>
+    </div>
+    <div class="pin-grid">
+      <button class="pin-btn" onclick="pp('1')">1</button><button class="pin-btn" onclick="pp('2')">2</button><button class="pin-btn" onclick="pp('3')">3</button>
+      <button class="pin-btn" onclick="pp('4')">4</button><button class="pin-btn" onclick="pp('5')">5</button><button class="pin-btn" onclick="pp('6')">6</button>
+      <button class="pin-btn" onclick="pp('7')">7</button><button class="pin-btn" onclick="pp('8')">8</button><button class="pin-btn" onclick="pp('9')">9</button>
+      <button class="pin-btn pin-clr" onclick="pc()">مسح</button><button class="pin-btn" onclick="pp('0')">0</button><button class="pin-btn" onclick="pd()">⌫</button>
+    </div>
+    <div class="pin-err" id="pinErr"></div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<div class="header">
+  <div><div class="header h1" style="font-size:1.2rem;font-weight:900;color:var(--gold)">⚙️ لوحة التحكم</div><div class="sub" id="compName">الطحان جولدن داتس</div></div>
+  <div class="status"><div class="dot" id="sDot"></div><span id="sTxt">غير متصل</span></div>
+</div>
+
+<!-- STATS -->
+<div class="stats">
+  <div class="stat"><div class="v" id="stTotal">-</div><div class="l">إجمالي المحقق</div></div>
+  <div class="stat"><div class="v" id="stPct">-</div><div class="l">نسبة التحقيق</div></div>
+  <div class="stat"><div class="v" id="stOver">-</div><div class="l">تجاوزوا الهدف 🏆</div></div>
+  <div class="stat"><div class="v" id="stReps">-</div><div class="l">عدد المندوبين</div></div>
+</div>
+
+<!-- DAYS BAR -->
+<div class="days-bar">
+  <div class="item"><div class="n" id="dWorked">-</div><div class="t">أيام مضت</div></div>
+  <div class="days-progress">
+    <div class="lbl"><span id="dMonth">الشهر</span><span id="dPct">-</span></div>
+    <div class="bar"><div class="fill" id="dFill" style="width:0%"></div></div>
+  </div>
+  <div class="item"><div class="n" id="dLeft" style="color:var(--red)">-</div><div class="t">يوم متبقي</div></div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+  <button class="tab active" onclick="ST('sales',this)">➕ مبيعات</button>
+  <button class="tab" onclick="ST('sectors',this)">🏭 القطاعات</button>
+  <button class="tab" onclick="ST('reps',this)">👥 المندوبون</button>
+  <button class="tab" onclick="ST('groups',this)">🏢 المجموعات</button>
+  <button class="tab" onclick="ST('comp',this)">🏅 المسابقات</button>
+  <button class="tab" onclick="ST('holidays',this)">🗓️ الإجازات</button>
+  <button class="tab" onclick="ST('settings',this)">📅 الإعدادات</button>
+  <button class="tab" onclick="ST('log',this)">📋 السجل</button>
+</div>
+
+<!-- TAB: SALES -->
+<div class="sec active" id="tab-sales">
+  <div class="card">
+    <h3>➕ إضافة مبيعات اليوم</h3>
+    <div class="fr">
+      <div class="fg"><label>المندوب</label><select id="addRepSel" onchange="updateRepInfo()"><option value="">اختر...</option></select></div>
+      <div class="fg"><label>المبيعات (ج.م)</label><input type="number" id="addAmt" placeholder="0" min="0"/></div>
+      <div class="fg"><label>ملاحظة</label><input type="text" id="addNote" placeholder="اختياري..."/></div>
+      <button class="btn grn" onclick="addSales()">✅ إضافة</button>
+    </div>
+    <div id="repInfo" style="font-size:.82rem;color:var(--dim);margin-top:6px"></div>
+  </div>
+  <div class="card"><h3>📋 سجل اليوم</h3><div id="todayLog"><div style="color:var(--dim);font-size:.83rem">لا توجد إضافات اليوم</div></div></div>
+</div>
+
+<!-- TAB: SECTORS -->
+<div class="sec" id="tab-sectors">
+  <div class="card">
+    <h3>🏭 إضافة قطاع جديد</h3>
+    <div class="fr">
+      <div class="fg"><label>اسم القطاع</label><input type="text" id="newSecName" placeholder="اسم القطاع"/></div>
+      <button class="btn" onclick="addSector()">➕ إضافة</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>🏭 القطاعات الحالية</h3>
+    <div id="sectorsView"><div style="color:var(--dim);font-size:.83rem">⏳ جاري التحميل...</div></div>
+  </div>
+</div>
+
+<!-- TAB: REPS -->
+<div class="sec" id="tab-reps">
+  <div class="card">
+    <h3>➕ إضافة مندوب جديد</h3>
+    <div class="fr">
+      <div class="fg"><label>الاسم</label><input type="text" id="nRName" placeholder="اسم المندوب"/></div>
+      <div class="fg"><label>القطاع</label><select id="nRSector"><option value="">بدون قطاع</option></select></div>
+      <div class="fg"><label>المجموعة</label><select id="nRGroup"><option value="">بدون مجموعة</option></select></div>
+      <div class="fg"><label>الهدف (ج.م)</label><input type="number" id="nRTarget" placeholder="0" min="0"/></div>
+      <button class="btn" onclick="addRep()">➕ إضافة</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>👥 المندوبون الحاليون</h3>
+    <div class="tw"><table><thead><tr><th>الاسم</th><th>القطاع</th><th>المجموعة</th><th>الهدف</th><th>المحقق</th><th>النسبة</th><th>إجراءات</th></tr></thead><tbody id="repsTable"><tr><td colspan="7" style="text-align:center;color:var(--dim)">⏳</td></tr></tbody></table></div>
+  </div>
+</div>
+
+<!-- TAB: GROUPS -->
+<div class="sec" id="tab-groups">
+  <div class="card">
+    <h3>➕ إضافة مجموعة جديدة</h3>
+    <div class="fr">
+      <div class="fg"><label>اسم المجموعة</label><input type="text" id="nGName" placeholder="اسم المجموعة"/></div>
+      <div class="fg"><label>القطاع</label><select id="nGSector"><option value="">اختر القطاع...</option></select></div>
+      <button class="btn" onclick="addGroup()">➕ إضافة</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>🏢 المجموعات الحالية</h3>
+    <div class="tw"><table><thead><tr><th>المجموعة</th><th>القطاع</th><th>المندوبون</th><th>المحقق</th><th>الهدف</th><th>النسبة</th><th>إجراءات</th></tr></thead><tbody id="groupsTable"><tr><td colspan="7" style="text-align:center;color:var(--dim)">⏳</td></tr></tbody></table></div>
+  </div>
+</div>
+
+<!-- TAB: COMPETITIONS -->
+<div class="sec" id="tab-comp">
+  <div class="card gold-border" style="border:2px solid var(--gold)">
+    <h3>🏅 المسار الفردي — تحدي الـ 110%</h3>
+    <p style="font-size:.82rem;color:var(--dim);margin-bottom:14px">المكافأة: 1,000 ج للمندوب + 1,000 ج للسائق | الشرط: تحقيق 110%+ من الهدف الشخصي</p>
+    <div id="comp110"></div>
+  </div>
+  <div class="card" style="border:2px solid var(--green)">
+    <h3>🏆 المسار الجماعي — حافز الفرع</h3>
+    <p style="font-size:.82rem;color:var(--dim);margin-bottom:14px">المكافأة: 500 ج للمندوب/السائق | 1,000 ج للمشرف | الشرط: تحقيق هدف الفرع + 90% فردي</p>
+    <div id="compBranch"></div>
+  </div>
+  <div class="card" style="border:2px solid var(--blue)">
+    <h3>🎯 المسار الجماعي — حافز القطاع</h3>
+    <p style="font-size:.82rem;color:var(--dim);margin-bottom:14px">المكافأة: 500 ج للمندوب/السائق | 1,000 ج للمشرف | الشرط: تحقيق هدف القطاع + 90% فردي</p>
+    <div id="compSector"></div>
+  </div>
+</div>
+
+<!-- TAB: HOLIDAYS -->
+<div class="sec" id="tab-holidays">
+  <div class="card">
+    <h3>➕ إضافة إجازة رسمية</h3>
+    <div class="fr">
+      <div class="fg"><label>التاريخ</label><input type="date" id="hDate"/></div>
+      <div class="fg"><label>اسم الإجازة</label><input type="text" id="hName" placeholder="مثال: عيد الفطر"/></div>
+      <button class="btn org" onclick="addHoliday()">➕ إضافة</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>🗓️ الإجازات الرسمية</h3>
+    <div id="holidaysList"><div style="color:var(--dim);font-size:.83rem">لا توجد إجازات مضافة</div></div>
+  </div>
+</div>
+
+<!-- TAB: SETTINGS -->
+<div class="sec" id="tab-settings">
+  <div class="card">
+    <h3>📅 إعدادات الشهر</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="fg"><label>اسم الشركة / القطاع</label><input type="text" id="sComp"/></div>
+      <div class="fg"><label>الشهر</label>
+        <select id="sMon"><option value="1">يناير</option><option value="2">فبراير</option><option value="3">مارس</option><option value="4">أبريل</option><option value="5" selected>مايو</option><option value="6">يونيو</option><option value="7">يوليو</option><option value="8">أغسطس</option><option value="9">سبتمبر</option><option value="10">أكتوبر</option><option value="11">نوفمبر</option><option value="12">ديسمبر</option></select>
+      </div>
+      <div class="fg"><label>السنة</label><input type="number" id="sYear" value="2026"/></div>
+      <div class="fg"><label>تاريخ البداية</label><input type="date" id="sStart"/></div>
+      <div class="fg"><label>تاريخ النهاية</label><input type="date" id="sEnd"/></div>
+    </div>
+    <div style="margin-top:14px"><button class="btn" onclick="saveSettings()">💾 حفظ الإعدادات</button></div>
+  </div>
+  <div class="card">
+    <h3>📱 رسالة واتساب اليومية</h3>
+    <p style="font-size:.83rem;color:var(--dim);margin-bottom:14px">اضغط الزرار لإرسال تقرير تحفيزي يومي للمشرفين عبر واتساب</p>
+    <div style="text-align:center">
+      <button class="wa-btn" onclick="sendWA()">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+        إرسال تقرير اليوم للمشرفين
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TAB: LOG -->
+<div class="sec" id="tab-log">
+  <div class="card"><h3>📋 سجل المبيعات الكامل</h3><div id="fullLog"><div style="color:var(--dim);font-size:.83rem">⏳ جاري التحميل...</div></div></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+// ── CONFIG ────────────────────────────────────────────────
+const PIN = '1412';
+const SHEET = 'https://script.google.com/macros/s/AKfycbwQVzaSg0kxw0eSQ2m5v46wn5HAA9iR02bDtkRSxoxvUsE06g7xfd9wJ-XBcfuGDrrJ7A/exec';
+let D = {reps:[],groups:[],sectors:[],settings:{},log:[],holidays:[]};
+
+// ── PIN ───────────────────────────────────────────────────
+let pin='';
+function pp(n){if(pin.length>=4)return;pin+=n;updDots();if(pin.length===4)chkPin();}
+function pd(){pin=pin.slice(0,-1);updDots();document.getElementById('pinErr').textContent='';}
+function pc(){pin='';updDots();document.getElementById('pinErr').textContent='';}
+function updDots(){for(let i=0;i<4;i++)document.getElementById('d'+i).classList.toggle('filled',i<pin.length);}
+async function chkPin(){
+  if(pin===PIN){
+    sessionStorage.setItem('adminAuth','1');
+    document.getElementById('pinOverlay').style.display='none';
+    document.body.classList.remove('locked');
+    window.location.reload();
+  }else{
+    document.getElementById('pinErr').textContent='❌ PIN غلط، حاول تاني';
+    pin='';updDots();
+    const b=document.querySelector('.pin-box');
+    b.style.animation='shake .3s ease';
+    setTimeout(()=>b.style.animation='',300);
+  }
+}
+
+// ── INIT ──────────────────────────────────────────────────
+window.onload=async()=>{
+  if(sessionStorage.getItem('adminAuth')!=='1')return;
+  setConn(true);
+  await loadAll();
+};
+
+function setConn(v){
+  document.getElementById('sDot').className='dot'+(v?' on':'');
+  document.getElementById('sTxt').textContent=v?'متصل بـ Google Sheets':'غير متصل';
+}
+
+// ── API ───────────────────────────────────────────────────
+async function api(action,body={}){
+  try{
+    const p=new URLSearchParams({action,...body});
+    const r=await fetch(SHEET+'?'+p.toString(),{redirect:'follow'});
+    const t=await r.text();
+    try{return JSON.parse(t);}catch{return{success:false,error:t};}
+  }catch(e){toast('خطأ: '+e.message,'err');return null;}
+}
+
+async function loadAll(){
+  const d=await api('getData');
+  if(!d||!d.success){setConn(false);return;}
+  D=d;
+  // ensure arrays
+  D.sectors=D.sectors||[];D.holidays=D.holidays||[];
+  renderAll();
+}
+
+// ── RENDER ────────────────────────────────────────────────
+function fmt(n){return Number(n||0).toLocaleString('ar-EG');}
+function pct(a,t){if(!t||t==0)return 0;return Math.round((a/t)*100);}
+
+function renderAll(){
+  renderStats();
+  renderDays();
+  renderSelects();
+  renderRepsTable();
+  renderGroupsTable();
+  renderSectors();
+  renderCompetitions();
+  renderHolidays();
+  renderTodayLog();
+  renderFullLog();
+  loadSettings();
+}
+
+function renderStats(){
+  const tot=D.reps.reduce((s,r)=>s+Number(r.achieved||0),0);
+  const tgt=D.reps.reduce((s,r)=>s+Number(r.target||0),0);
+  const over=D.reps.filter(r=>Number(r.achieved||0)>=Number(r.target||0)).length;
+  document.getElementById('stTotal').textContent=fmt(tot)+' ج';
+  document.getElementById('stPct').textContent=pct(tot,tgt)+'%';
+  document.getElementById('stOver').textContent=over;
+  document.getElementById('stReps').textContent=D.reps.length;
+  if(D.settings.company)document.getElementById('compName').textContent=D.settings.company;
+}
+
+function renderDays(){
+  const s=D.settings;
+  const months=['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  document.getElementById('dMonth').textContent=months[s.month]||'الشهر';
+  
+  if(!s.startDate||!s.endDate){
+    document.getElementById('dLeft').textContent='-';
+    document.getElementById('dWorked').textContent='-';
+    document.getElementById('dPct').textContent='-';
+    return;
+  }
+  
+  const start=new Date(s.startDate);
+  const end=new Date(s.endDate);
+  const today=new Date();
+  today.setHours(0,0,0,0);
+  
+  // Count working days excluding holidays
+  const holidays=new Set((D.holidays||[]).map(h=>h.date));
+  
+  function isWorkDay(d){
+    const day=d.getDay();
+    const ds=d.toISOString().split('T')[0];
+    return day!==5 && !holidays.has(ds); // Friday off + official holidays
+  }
+  
+  let totalWork=0,workedDays=0,remainDays=0;
+  let cur=new Date(start);
+  while(cur<=end){
+    if(isWorkDay(cur)){
+      totalWork++;
+      if(cur<today)workedDays++;
+      else if(cur>=today)remainDays++;
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+  
+  const p=totalWork>0?Math.round((workedDays/totalWork)*100):0;
+  document.getElementById('dLeft').textContent=remainDays;
+  document.getElementById('dWorked').textContent=workedDays;
+  document.getElementById('dPct').textContent=p+'%';
+  document.getElementById('dFill').style.width=p+'%';
+}
+
+function renderSelects(){
+  // Rep select for sales
+  const sel=document.getElementById('addRepSel');
+  const cur=sel.value;
+  sel.innerHTML='<option value="">اختر المندوب...</option>';
+  D.reps.forEach(r=>{
+    const o=document.createElement('option');
+    o.value=r.id;o.textContent=r.name+(r.group?` (${r.group})`:'');
+    sel.appendChild(o);
+  });
+  if(cur)sel.value=cur;
+  
+  // Sector selects
+  ['nRSector','nGSector'].forEach(id=>{
+    const s=document.getElementById(id);
+    s.innerHTML='<option value="">بدون قطاع</option>';
+    D.sectors.forEach(sec=>{
+      const o=document.createElement('option');
+      o.value=sec.name;o.textContent=sec.name;s.appendChild(o);
+    });
+  });
+  
+  // Group select for rep
+  const gs=document.getElementById('nRGroup');
+  gs.innerHTML='<option value="">بدون مجموعة</option>';
+  D.groups.forEach(g=>{
+    const o=document.createElement('option');
+    o.value=g.name;o.textContent=g.name+(g.sector?` (${g.sector})`:'');
+    gs.appendChild(o);
+  });
+}
+
+function updateRepInfo(){
+  const id=document.getElementById('addRepSel').value;
+  const r=D.reps.find(x=>x.id==id);
+  const el=document.getElementById('repInfo');
+  if(r){
+    const p=pct(r.achieved,r.target);
+    el.innerHTML=`المحقق: <strong style="color:var(--gold)">${fmt(r.achieved)} ج</strong> | الهدف: <strong>${fmt(r.target)} ج</strong> | النسبة: <strong style="color:${p>=90?'var(--green)':'var(--red)'}">${p}%</strong>`;
+  }else el.innerHTML='';
+}
+
+function renderRepsTable(){
+  const tb=document.getElementById('repsTable');
+  if(!D.reps.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--dim)">لا يوجد مندوبون</td></tr>';return;}
+  tb.innerHTML=D.reps.map(r=>{
+    const p=pct(r.achieved,r.target);
+    const cls=p>=110?'gold':p>=100?'g':p>=90?'b':p>=70?'o':'r';
+    return `<tr>
+      <td><strong>${r.name}</strong></td>
+      <td>${r.sector||'—'}</td>
+      <td>${r.group||'—'}</td>
+      <td>${fmt(r.target)}</td>
+      <td>${fmt(r.achieved)}</td>
+      <td><span class="badge ${cls}">${p}%</span><div class="pb"><div class="pf${p>=100?' over':''}" style="width:${Math.min(p,100)}%"></div></div></td>
+      <td><button class="btn sm red" onclick="delRep('${r.id}','${r.name}')">🗑</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderGroupsTable(){
+  const tb=document.getElementById('groupsTable');
+  if(!D.groups.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--dim)">لا توجد مجموعات</td></tr>';return;}
+  tb.innerHTML=D.groups.map(g=>{
+    const reps=D.reps.filter(r=>r.group===g.name);
+    const ach=reps.reduce((s,r)=>s+Number(r.achieved||0),0);
+    const tgt=reps.reduce((s,r)=>s+Number(r.target||0),0);
+    const p=pct(ach,tgt);
+    return `<tr>
+      <td><strong>${g.name}</strong></td>
+      <td>${g.sector||'—'}</td>
+      <td>${reps.length}</td>
+      <td>${fmt(ach)} ج</td>
+      <td>${fmt(tgt)} ج</td>
+      <td><span class="badge ${p>=100?'g':p>=70?'o':'r'}">${p}%</span></td>
+      <td><button class="btn sm red" onclick="delGroup('${g.name}')">🗑</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSectors(){
+  const el=document.getElementById('sectorsView');
+  if(!D.sectors.length){el.innerHTML='<div style="color:var(--dim);font-size:.83rem">لا توجد قطاعات بعد</div>';return;}
+  el.innerHTML=D.sectors.map(sec=>{
+    const secGroups=D.groups.filter(g=>g.sector===sec.name);
+    const secReps=D.reps.filter(r=>r.sector===sec.name);
+    const ach=secReps.reduce((s,r)=>s+Number(r.achieved||0),0);
+    const tgt=secReps.reduce((s,r)=>s+Number(r.target||0),0);
+    const p=pct(ach,tgt);
+    return `<div class="sector-card">
+      <h4>🏭 ${sec.name} <span style="font-size:.8rem;font-weight:400;color:var(--dim)">${secReps.length} مندوب | ${secGroups.length} مجموعة</span>
+        <button class="btn sm red" style="float:left" onclick="delSector('${sec.name}')">🗑</button>
+      </h4>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">
+        <span>📊 المحقق: <strong style="color:var(--gold)">${fmt(ach)} ج</strong></span>
+        <span>🎯 الهدف: <strong>${fmt(tgt)} ج</strong></span>
+        <span>📈 النسبة: <strong style="color:${p>=100?'var(--green)':'var(--gold)'}">${p}%</strong></span>
+      </div>
+      <div class="pb" style="height:8px"><div class="pf${p>=100?' over':''}" style="width:${Math.min(p,100)}%"></div></div>
+      ${secGroups.length?`<div style="margin-top:10px;font-size:.8rem;color:var(--dim)">المجموعات: ${secGroups.map(g=>`<span style="background:var(--bg2);padding:2px 8px;border-radius:10px;margin:2px">${g.name}</span>`).join(' ')}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function renderCompetitions(){
+  // 110% individual
+  const el110=document.getElementById('comp110');
+  if(!D.reps.length){el110.innerHTML='<div style="color:var(--dim);font-size:.83rem">لا يوجد مندوبون</div>';return;}
+  el110.innerHTML=D.reps.map(r=>{
+    const p=pct(r.achieved,r.target);
+    const cls=p>=110?'yes':p>=90?'warn':'no';
+    const icon=p>=110?'🏆':p>=90?'⚡':'❌';
+    return `<div class="eligibility-item ${cls}">
+      <span><strong>${r.name}</strong> ${r.group?`<span style="font-size:.75rem;color:var(--dim)">(${r.group})</span>`:''}</span>
+      <span>${icon} <strong>${p}%</strong> ${p>=110?'— يستحق 1,000 ج ✅':p>=90?'— قريب، يحتاج '+(110-p)+'% إضافي':'— لا يستحق بعد'}</span>
+    </div>`;
+  }).join('');
+  
+  // Branch collective (90%+ min + group target)
+  const elB=document.getElementById('compBranch');
+  if(!D.groups.length){elB.innerHTML='<div style="color:var(--dim);font-size:.83rem">لا توجد مجموعات</div>';return;}
+  elB.innerHTML=D.groups.map(g=>{
+    const reps=D.reps.filter(r=>r.group===g.name);
+    const ach=reps.reduce((s,r)=>s+Number(r.achieved||0),0);
+    const tgt=reps.reduce((s,r)=>s+Number(r.target||0),0);
+    const gp=pct(ach,tgt);
+    const allAbove90=reps.every(r=>pct(r.achieved,r.target)>=90);
+    const eligible=gp>=100&&allAbove90;
+    const cls=eligible?'yes':gp>=90?'warn':'no';
+    return `<div class="eligibility-item ${cls}">
+      <span><strong>🏢 ${g.name}</strong> — ${reps.length} مندوب | تحقيق ${gp}%</span>
+      <span>${eligible?'✅ يستحق الحافز (500 ج/مندوب | 1,000 ج/مشرف)':gp>=100&&!allAbove90?'⚠️ يوجد مندوب أقل من 90%':'❌ لم يكتمل الهدف بعد'}</span>
+    </div>`;
+  }).join('');
+  
+  // Sector collective
+  const elS=document.getElementById('compSector');
+  if(!D.sectors.length){elS.innerHTML='<div style="color:var(--dim);font-size:.83rem">لا توجد قطاعات</div>';return;}
+  elS.innerHTML=D.sectors.map(sec=>{
+    const reps=D.reps.filter(r=>r.sector===sec.name);
+    const ach=reps.reduce((s,r)=>s+Number(r.achieved||0),0);
+    const tgt=reps.reduce((s,r)=>s+Number(r.target||0),0);
+    const sp=pct(ach,tgt);
+    const allAbove90=reps.every(r=>pct(r.achieved,r.target)>=90);
+    const eligible=sp>=100&&allAbove90;
+    return `<div class="eligibility-item ${eligible?'yes':sp>=90?'warn':'no'}">
+      <span><strong>🏭 ${sec.name}</strong> — ${reps.length} مندوب | تحقيق ${sp}%</span>
+      <span>${eligible?'✅ يستحق الحافز (500 ج/مندوب | 1,000 ج/مشرف)':sp>=100&&!allAbove90?'⚠️ يوجد مندوب أقل من 90%':'❌ لم يكتمل الهدف بعد'}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderHolidays(){
+  const el=document.getElementById('holidaysList');
+  if(!D.holidays||!D.holidays.length){el.innerHTML='<div style="color:var(--dim);font-size:.83rem">لا توجد إجازات مضافة</div>';return;}
+  const sorted=[...D.holidays].sort((a,b)=>a.date>b.date?1:-1);
+  el.innerHTML=sorted.map(h=>`
+    <div class="holiday-item">
+      <span>📅 <strong>${new Date(h.date+'T00:00:00').toLocaleDateString('ar-EG',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</strong></span>
+      <span style="display:flex;align-items:center;gap:8px">
+        <span style="color:var(--orange)">${h.name}</span>
+        <button class="btn sm red" onclick="delHoliday('${h.date}')">🗑</button>
+      </span>
+    </div>`).join('');
+}
+
+function renderTodayLog(){
+  const today=new Date().toLocaleDateString('ar-EG');
+  const entries=D.log.filter(l=>new Date(l.date).toLocaleDateString('ar-EG')===today);
+  const el=document.getElementById('todayLog');
+  if(!entries.length){el.innerHTML='<div style="color:var(--dim);font-size:.83rem">لا توجد إضافات اليوم</div>';return;}
+  el.innerHTML=[...entries].reverse().map(l=>`
+    <div class="log-item">
+      <div><strong>${l.repName}</strong>${l.note?` <span style="color:var(--dim)">— ${l.note}</span>`:''}</div>
+      <div style="text-align:left"><div class="amt">+${fmt(l.amount)} ج</div><div class="meta">${new Date(l.date).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}</div></div>
+    </div>`).join('');
+}
+
+function renderFullLog(){
+  const el=document.getElementById('fullLog');
+  if(!D.log.length){el.innerHTML='<div style="color:var(--dim);font-size:.83rem">السجل فارغ</div>';return;}
+  el.innerHTML=[...D.log].reverse().map(l=>`
+    <div class="log-item">
+      <div><strong>${l.repName}</strong>${l.note?` <span style="color:var(--dim)">— ${l.note}</span>`:''}</div>
+      <div style="text-align:left"><div class="amt">+${fmt(l.amount)} ج</div><div class="meta">${new Date(l.date).toLocaleDateString('ar-EG')} ${new Date(l.date).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}</div></div>
+    </div>`).join('');
+}
+
+function loadSettings(){
+  const s=D.settings||{};
+  if(s.company)document.getElementById('sComp').value=s.company;
+  if(s.month)document.getElementById('sMon').value=s.month;
+  if(s.year)document.getElementById('sYear').value=s.year;
+  if(s.startDate)document.getElementById('sStart').value=s.startDate;
+  if(s.endDate)document.getElementById('sEnd').value=s.endDate;
+}
+
+// ── ACTIONS ───────────────────────────────────────────────
+async function addSales(){
+  const id=document.getElementById('addRepSel').value;
+  const amt=parseFloat(document.getElementById('addAmt').value);
+  const note=document.getElementById('addNote').value.trim();
+  if(!id){toast('اختر المندوب','err');return;}
+  if(!amt||amt<=0){toast('أدخل قيمة صحيحة','err');return;}
+  const r=D.reps.find(x=>x.id==id);
+  const res=await api('addSales',{repId:id,repName:r?.name,amount:amt,note,date:new Date().toISOString()});
+  if(res?.success){toast(`✅ تمت إضافة ${fmt(amt)} ج لـ ${r?.name}`,'ok');document.getElementById('addAmt').value='';document.getElementById('addNote').value='';await loadAll();}
+  else toast('خطأ: '+(res?.error||''),'err');
+}
+
+async function addSector(){
+  const name=document.getElementById('newSecName').value.trim();
+  if(!name){toast('أدخل اسم القطاع','err');return;}
+  const res=await api('addSector',{name});
+  if(res?.success){toast('✅ تمت إضافة القطاع','ok');document.getElementById('newSecName').value='';await loadAll();}
+  else toast('خطأ: '+(res?.error||''),'err');
+}
+
+async function delSector(name){
+  if(!confirm(`حذف القطاع "${name}"؟`))return;
+  const res=await api('deleteSector',{name});
+  if(res?.success){toast('🗑 تم الحذف','ok');await loadAll();}
+  else toast('خطأ','err');
+}
+
+async function addRep(){
+  const name=document.getElementById('nRName').value.trim();
+  const sector=document.getElementById('nRSector').value;
+  const group=document.getElementById('nRGroup').value;
+  const target=parseFloat(document.getElementById('nRTarget').value);
+  if(!name){toast('أدخل اسم المندوب','err');return;}
+  if(!target||target<=0){toast('أدخل الهدف','err');return;}
+  const res=await api('addRep',{name,sector,group,target,id:Date.now().toString()});
+  if(res?.success){toast(`✅ تمت إضافة ${name}`,'ok');document.getElementById('nRName').value='';document.getElementById('nRTarget').value='';await loadAll();}
+  else toast('خطأ: '+(res?.error||''),'err');
+}
+
+async function delRep(id,name){
+  if(!confirm(`حذف المندوب "${name}"؟`))return;
+  const res=await api('deleteRep',{id});
+  if(res?.success){toast(`🗑 تم حذف ${name}`,'ok');await loadAll();}
+  else toast('خطأ','err');
+}
+
+async function addGroup(){
+  const name=document.getElementById('nGName').value.trim();
+  const sector=document.getElementById('nGSector').value;
+  if(!name){toast('أدخل اسم المجموعة','err');return;}
+  const res=await api('addGroup',{name,sector});
+  if(res?.success){toast(`✅ تمت إضافة ${name}`,'ok');document.getElementById('nGName').value='';await loadAll();}
+  else toast('خطأ: '+(res?.error||''),'err');
+}
+
+async function delGroup(name){
+  if(!confirm(`حذف المجموعة "${name}"؟`))return;
+  const res=await api('deleteGroup',{name});
+  if(res?.success){toast(`🗑 تم حذف ${name}`,'ok');await loadAll();}
+  else toast('خطأ','err');
+}
+
+async function addHoliday(){
+  const date=document.getElementById('hDate').value;
+  const name=document.getElementById('hName').value.trim();
+  if(!date){toast('أدخل التاريخ','err');return;}
+  if(!name){toast('أدخل اسم الإجازة','err');return;}
+  const res=await api('addHoliday',{date,name});
+  if(res?.success){toast('✅ تمت إضافة الإجازة','ok');document.getElementById('hDate').value='';document.getElementById('hName').value='';await loadAll();}
+  else toast('خطأ: '+(res?.error||''),'err');
+}
+
+async function delHoliday(date){
+  if(!confirm('حذف هذه الإجازة؟'))return;
+  const res=await api('deleteHoliday',{date});
+  if(res?.success){toast('🗑 تم الحذف','ok');await loadAll();}
+  else toast('خطأ','err');
+}
+
+async function saveSettings(){
+  const s={
+    company:document.getElementById('sComp').value,
+    month:document.getElementById('sMon').value,
+    year:document.getElementById('sYear').value,
+    startDate:document.getElementById('sStart').value,
+    endDate:document.getElementById('sEnd').value,
+  };
+  const res=await api('saveSettings',s);
+  if(res?.success){toast('✅ تم حفظ الإعدادات','ok');await loadAll();}
+  else toast('خطأ','err');
+}
+
+function sendWA(){
+  const s=D.settings||{};
+  const months=['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const tot=D.reps.reduce((s,r)=>s+Number(r.achieved||0),0);
+  const tgt=D.reps.reduce((s,r)=>s+Number(r.target||0),0);
+  const p=pct(tot,tgt);
+  const left=document.getElementById('dLeft').textContent;
+  const top3=[...D.reps].sort((a,b)=>Number(b.achieved||0)-Number(a.achieved||0)).slice(0,3);
+  const over110=D.reps.filter(r=>pct(r.achieved,r.target)>=110).length;
+  const over100=D.reps.filter(r=>pct(r.achieved,r.target)>=100).length;
+  const below90=D.reps.filter(r=>pct(r.achieved,r.target)<90).length;
+  
+  let msg=`🏆 *تقرير ${s.company||'الطحان جولدن داتس'} — ${months[s.month]||''} ${s.year||''}*\n`;
+  msg+=`📅 ${new Date().toLocaleDateString('ar-EG',{weekday:'long',day:'numeric',month:'long'})}\n\n`;
+  msg+=`📊 *إجمالي القطاع:* ${fmt(tot)} ج من ${fmt(tgt)} ج\n`;
+  msg+=`🎯 *نسبة التحقيق:* ${p}%\n`;
+  msg+=`⏳ *أيام متبقية:* ${left} يوم\n\n`;
+  msg+=`🌟 *المتصدرون:*\n`;
+  top3.forEach((r,i)=>{
+    const medals=['🥇','🥈','🥉'];
+    msg+=`${medals[i]} ${r.name}: ${fmt(r.achieved)} ج (${pct(r.achieved,r.target)}%)\n`;
+  });
+  msg+=`\n📈 *إحصائيات:*\n`;
+  msg+=`✅ تجاوزوا 110%: ${over110} مندوب\n`;
+  msg+=`🏁 أكملوا الهدف: ${over100} مندوب\n`;
+  if(below90>0)msg+=`⚠️ أقل من 90%: ${below90} مندوب يحتاج دعم\n`;
+  msg+=`\n💪 *يلا بينا، كل يوم خطوة للأمام!* 🚀`;
+  
+  const url='https://wa.me/?text='+encodeURIComponent(msg);
+  window.open(url,'_blank');
+}
+
+// ── UI ────────────────────────────────────────────────────
+function ST(name,btn){
+  document.querySelectorAll('.sec').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  btn.classList.add('active');
+}
+
+function toast(msg,type=''){
+  const c=document.getElementById('toasts');
+  const t=document.createElement('div');
+  t.className='toast '+type;t.textContent=msg;
+  c.appendChild(t);setTimeout(()=>t.remove(),3000);
+}
+</script>
+</body>
+</html>
