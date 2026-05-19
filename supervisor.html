@@ -204,10 +204,12 @@ window.onload = async () => {
 async function loadData() {
   try {
     const r = await fetch(SHEET+'?action=getData',{redirect:'follow'});
-    D = await r.json();
+    const text = await r.text();
+    try { D = JSON.parse(text); } catch(e) { console.error('Parse error:', text); return; }
     D.supervisors = D.supervisors||[];
     D.reps = D.reps||[];
-  } catch(e) { console.error(e); }
+    console.log('Supervisors loaded:', D.supervisors.length, D.supervisors);
+  } catch(e) { console.error('Fetch error:', e); }
 }
 
 function populateSupSelect() {
