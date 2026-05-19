@@ -267,6 +267,7 @@
     display: flex; align-items: center; justify-content: center;
     flex-direction: column;
   }
+  .pin-overlay[style*="none"] { display: none !important; }
   .pin-box {
     background: #ffffff;
     border: 2px solid #c5e0f5;
@@ -310,10 +311,27 @@
   }
 
 </style>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    if (sessionStorage.getItem('adminAuth') !== '1') {
+      document.body.classList.add('locked');
+      document.getElementById('pinOverlay').style.display = 'flex';
+    } else {
+      document.body.classList.remove('locked');
+      document.getElementById('pinOverlay').style.display = 'none';
+    }
+  });
+</script>
 </head>
 <body>
 
 
+<script>
+  // Block immediately before page renders
+  if (sessionStorage.getItem('adminAuth') !== '1') {
+    document.documentElement.style.overflow = 'hidden';
+  }
+</script>
 <div class="pin-overlay" id="pinOverlay">
   <div class="pin-box">
     <div style="font-size:2.5rem;margin-bottom:12px">🔐</div>
@@ -354,14 +372,6 @@
   </div>
 </div>
 
-<!-- SETUP BANNER -->
-<div class="setup-banner" id="setupBanner">
-  <h3>⚠️ ربط Google Sheets — خطوة واحدة</h3>
-  <p>افتح الدليل <strong>SETUP_GUIDE.md</strong> لإنشاء الـ Sheet والـ Script، ثم الصق رابط الـ Web App هنا:</p>
-  <div class="url-input-group">
-    <input type="text" id="sheetUrlInput" placeholder="https://script.google.com/macros/s/..." />
-    <button class="btn" onclick="saveSheetUrl()">💾 حفظ وربط</button>
-  </div>
 </div>
 
 <!-- STATS -->
@@ -516,10 +526,13 @@ function updateDots() {
     document.getElementById('d' + i).classList.toggle('filled', i < pinValue.length);
   }
 }
-function checkPin() {
+async function checkPin() {
   if (pinValue === CORRECT_PIN) {
     sessionStorage.setItem('adminAuth', '1');
     document.getElementById('pinOverlay').style.display = 'none';
+    document.body.classList.remove('locked');
+    // Load data after successful login
+    await loadAll();
   } else {
     document.getElementById('pinError').textContent = '❌ PIN غلط، حاول تاني';
     pinValue = '';
@@ -542,11 +555,8 @@ let appData = { reps: [], groups: [], settings: {}, log: [] };
 // INIT
 // ============================================================
 window.onload = async () => {
-  // Check PIN auth
   if (sessionStorage.getItem('adminAuth') !== '1') {
-    document.getElementById('pinOverlay').style.display = 'flex';
-  } else {
-    document.getElementById('pinOverlay').style.display = 'none';
+    return; // Don't load data until authenticated
   }
   if (SHEET_URL) {
     document.getElementById('setupBanner').style.display = 'none';
