@@ -1,4 +1,4 @@
-const CACHE = 'tahan-v1';
+const CACHE = 'tahan-v3';
 const FILES = [
   '/leaderboard/',
   '/leaderboard/index.html',
