@@ -1345,14 +1345,14 @@ function renderBranches() {
   const years = activeYears(inv, i => i.__year);
   const branchBmap = yearBreakdownMap(inv, i => i['الفرع'], i => i.__year, i => i.__net);
   const branchHeaders = years.length >= 2
-    ? ['الفرع', ...yearColumnHeaders(years), 'عدد الفواتير', 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة']
-    : ['الفرع', 'عدد الفواتير', 'صافي المبيعات', 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة'];
+    ? ['الفرع', ...yearColumnHeaders(years), 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة']
+    : ['الفرع', 'صافي المبيعات', 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة'];
   const rowsHtml = byBranch.map(x => {
     const discX = inv.filter(i => i['الفرع'] === x.key).reduce((s, i) => s + i.__discount, 0);
     if (years.length >= 2) {
-      return [x.key, ...yearColumnCells(branchBmap, x.key, years, fmtMoney), fmt(x.count), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
+      return [x.key, ...yearColumnCells(branchBmap, x.key, years, fmtMoney), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
     }
-    return [x.key, fmt(x.count), fmtMoney(x.sum), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
+    return [x.key, fmtMoney(x.sum), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
   });
 
   el.innerHTML = `
@@ -1375,8 +1375,8 @@ function renderCustomers() {
   const years = activeYears(inv, i => i.__year);
   const custBmap = yearBreakdownMap(inv, i => i['العميل'], i => i.__year, i => i.__net);
   const custHeaders = years.length >= 2
-    ? ['العميل', 'عدد الفواتير', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', ...yearColumnHeaders(years)]
-    : ['العميل', 'عدد الفواتير', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', 'الصافي بعد الخصم والضريبة'];
+    ? ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', ...yearColumnHeaders(years)]
+    : ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', 'الصافي بعد الخصم والضريبة'];
   const rowsHtml = top.map(x => {
     const invs = inv.filter(i => i['العميل'] === x.key);
     const grossX = invs.reduce((s, i) => s + i.__gross, 0);
@@ -1384,9 +1384,9 @@ function renderCustomers() {
     const taxX = invs.reduce((s, i) => s + i.__tax, 0);
     const discPctX = grossX ? discX / grossX : 0;
     if (years.length >= 2) {
-      return [x.key, fmt(x.count), fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)];
+      return [x.key, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)];
     }
-    return [x.key, fmt(x.count), fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
+    return [x.key, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
   });
 
   const byCash = groupSum(inv, i => i['نوع_البيع'], i => i.__net);
@@ -1415,15 +1415,15 @@ function renderReps() {
   byRep.sort((a, b) => b.sum - a.sum);
   const repBmap = yearBreakdownMap(inv, i => i['المندوب'], i => i.__year, i => i.__net);
   const repHeaders = years.length >= 2
-    ? ['المندوب', 'عدد الفواتير', 'عدد العملاء', ...yearColumnHeaders(years), 'متوسط الفاتورة']
-    : ['المندوب', 'عدد الفواتير', 'عدد العملاء', 'صافي المبيعات', 'متوسط الفاتورة'];
+    ? ['المندوب', 'عدد العملاء', ...yearColumnHeaders(years), 'متوسط الفاتورة']
+    : ['المندوب', 'عدد العملاء', 'صافي المبيعات', 'متوسط الفاتورة'];
   const repRows = byRep.map(x => {
     const invs = inv.filter(i => i['المندوب'] === x.key);
     const custs = new Set(invs.map(i => i['العميل'])).size;
     if (years.length >= 2) {
-      return [x.key, fmt(x.count), fmt(custs), ...yearColumnCells(repBmap, x.key, years, fmtMoney), fmtMoney(x.sum / (x.count || 1))];
+      return [x.key, fmt(custs), ...yearColumnCells(repBmap, x.key, years, fmtMoney), fmtMoney(x.sum / (x.count || 1))];
     }
-    return [x.key, fmt(x.count), fmt(custs), fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1))];
+    return [x.key, fmt(custs), fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1))];
   });
 
   const withRoute = inv.filter(i => i.__route);
@@ -1432,17 +1432,17 @@ function renderReps() {
   byRoute.sort((a, b) => b.sum - a.sum);
   const routeBmap = yearBreakdownMap(withRoute, i => i.__route.خط_سير, i => i.__year, i => i.__net);
   const routeHeaders = years.length >= 2
-    ? ['خط السير', 'المنطقة', 'القطاع', 'عدد المواقع', 'عدد الفواتير', ...yearColumnHeaders(years)]
-    : ['خط السير', 'المنطقة', 'القطاع', 'عدد المواقع', 'عدد الفواتير', 'صافي المبيعات'];
+    ? ['خط السير', 'المنطقة', 'القطاع', 'عدد المواقع', ...yearColumnHeaders(years)]
+    : ['خط السير', 'المنطقة', 'القطاع', 'عدد المواقع', 'صافي المبيعات'];
   const routeRows = byRoute.map(x => {
     const invs = withRoute.filter(i => i.__route.خط_سير === x.key);
     const sites = new Set(invs.map(i => i['فرع_العميل'])).size;
     const region = invs[0] ? invs[0].__route.المنطقة : '';
     const sector = invs[0] ? invs[0].__route.القطاع : '';
     if (years.length >= 2) {
-      return [x.key, region, sector, fmt(sites), fmt(x.count), ...yearColumnCells(routeBmap, x.key, years, fmtMoney)];
+      return [x.key, region, sector, fmt(sites), ...yearColumnCells(routeBmap, x.key, years, fmtMoney)];
     }
-    return [x.key, region, sector, fmt(sites), fmt(x.count), fmtMoney(x.sum)];
+    return [x.key, region, sector, fmt(sites), fmtMoney(x.sum)];
   });
 
   const coveragePct = inv.length ? withRoute.length / inv.length : 0;
@@ -1472,12 +1472,12 @@ function renderQuarterly() {
   const key = (i) => (i.__year ? i.__year + ' - ر' + i.__quarter : null);
   const byQ = groupSum(inv, key, i => i.__net);
   byQ.sort((a, b) => a.key.localeCompare(b.key));
-  const rows = byQ.map(x => [x.key, fmt(x.count), fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1))]);
+  const rows = byQ.map(x => [x.key, fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1))]);
 
   el.innerHTML = `
     <div class="chart-box"><canvas id="chQuarterly"></canvas></div>
     <div class="table-title">تفاصيل كل ربع سنة</div>
-    <div class="table-wrap">${tableHTML(['الربع', 'عدد الفواتير', 'صافي المبيعات', 'متوسط الفاتورة'], rows)}</div>
+    <div class="table-wrap">${tableHTML(['الربع', 'صافي المبيعات', 'متوسط الفاتورة'], rows)}</div>
   `;
   makeChart('chQuarterly', barConfig(byQ.map(x => x.key), byQ.map(x => x.sum), 'صافي المبيعات', false));
 }
@@ -1506,7 +1506,7 @@ function renderYoY() {
   const yearRows = byYear.map((x, idx) => {
     const prev = byYear[idx - 1];
     const growth = prev ? (x.sum - prev.sum) / prev.sum : null;
-    return [x.key, fmt(x.count), fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1)), growth === null ? '-' : fmtPct(growth)];
+    return [x.key, fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1)), growth === null ? '-' : fmtPct(growth)];
   });
 
   // per activity per year
@@ -1548,7 +1548,7 @@ function renderYoY() {
     </div>
     <div class="chart-box"><canvas id="chYoY"></canvas></div>
     <div class="table-title">إجمالي المبيعات لكل سنة (حتى نهاية ${MONTH_NAMES_AR[cap - 1]})</div>
-    <div class="table-wrap">${tableHTML(['السنة', 'عدد الفواتير', 'صافي المبيعات', 'متوسط الفاتورة', 'نمو عن السنة السابقة'], yearRows)}</div>
+    <div class="table-wrap">${tableHTML(['السنة', 'صافي المبيعات', 'متوسط الفاتورة', 'نمو عن السنة السابقة'], yearRows)}</div>
     <div class="table-title">مقارنة كل نشاط بين السنوات</div>
     <div class="table-wrap">${tableHTML(['النشاط', ...years.map(y => 'صافي ' + y), 'نمو آخر سنة'], actRows)}</div>
     <div class="table-title">مقارنة كل فرع بين السنوات</div>
