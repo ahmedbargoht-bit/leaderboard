@@ -171,6 +171,7 @@ table.datatable th { background: var(--ink); color: var(--sand); padding: 9px 10
 table.datatable td { padding: 7px 10px; border-bottom: 1px solid var(--sand); }
 table.datatable tr:nth-child(even) td { background: #FAF7F2; }
 table.datatable tr:hover td { background: #F5E4DC; }
+table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(--ink); font-weight:800; border-top: 2px solid var(--caramel); position:sticky; bottom:0; }
 .table-wrap { max-height: 420px; overflow-y: auto; border-radius: 10px; border: 1px solid var(--sand-dark); margin-top:6px;}
 .table-title { font-size:14px; font-weight:800; color:var(--caramel-dark); margin: 18px 0 4px; }
 .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:20px; }
@@ -1380,11 +1381,29 @@ table.datatable tr:hover td { background: #F5E4DC; }
     و PALETTE المعرّفة مسبقًا في app.js)
    ============================================================ */
 
-function tableHTML(headers, rows) {
+function tableHTML(headers, rows, footerRow) {
   let h = '<table class="datatable"><thead><tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
   for (const r of rows) h += '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>';
-  h += '</tbody></table>';
+  h += '</tbody>';
+  if (footerRow && footerRow.length) {
+    h += '<tfoot><tr class="total-row">' + footerRow.map(c => `<td>${c}</td>`).join('') + '</tr></tfoot>';
+  }
+  h += '</table>';
   return h;
+}
+
+/* يبني Map بمفتاح واحد '__TOTAL__' فيه مجموع كل السنوات لمجموعة مفاتيح معينة - عشان نعيد استخدام yearColumnCells لحساب صف الإجمالي (بما فيه الفرق ونسبة النمو) */
+function sumYearTotalsBmap(bmap, keys, years) {
+  const totalYm = new Map();
+  years.forEach(y => totalYm.set(y, 0));
+  keys.forEach(k => {
+    const ym = bmap.get(k);
+    if (!ym) return;
+    years.forEach(y => totalYm.set(y, (totalYm.get(y) || 0) + (ym.get(y) || 0)));
+  });
+  const m = new Map();
+  m.set('__TOTAL__', totalYm);
+  return m;
 }
 
 function emptyState(msg) {
@@ -1411,6 +1430,11 @@ function yearColumnHeaders(years, prefix) {
   const h = years.map(y => (prefix || 'صافي ') + y);
   if (years.length >= 2) h.push('الفرق', 'نسبة النمو');
   return h;
+}
+function growthCellHTML(prev, last) {
+  if (prev === undefined || last === undefined) return '-';
+  const pct = prev ? (last - prev) / prev : (last > 0 ? 1 : 0);
+  return `<span style="color:${pct >= 0 ? 'var(--good)' : 'var(--bad)'}; font-weight:700;">${pct >= 0 ? '▲' : '▼'} ${fmtPct(Math.abs(pct))}</span>`;
 }
 function yearColumnCells(bmap, key, years, fmtFn) {
   const ym = bmap.get(key) || new Map();
@@ -1498,15 +1522,24 @@ function renderItems() {
   const itemValueRows = byItemValue.map(x => years.length >= 2
     ? [x.key, ...yearColumnCells(itemBmap, x.key, years, fmtMoney), fmt(x.count)]
     : [x.key, fmtMoney(x.sum), fmt(x.count)]);
+  const itemValueKeys = byItemValue.map(x => x.key);
+  const itemValueTotalCount = byItemValue.reduce((s, x) => s + x.count, 0);
+  const itemValueFooter = years.length >= 2
+    ? ['الإجمالي', ...yearColumnCells(sumYearTotalsBmap(itemBmap, itemValueKeys, years), '__TOTAL__', years, fmtMoney), fmt(itemValueTotalCount)]
+    : ['الإجمالي', fmtMoney(byItemValue.reduce((s, x) => s + x.sum, 0)), fmt(itemValueTotalCount)];
+
+  const itemQtyValueOf = (key) => groupSum(rows.filter(r => r.item === key), () => 1, r => r.total)[0]?.sum || 0;
+  const itemQtyRows = byItemQty.map(x => [x.key, fmt(x.sum), fmtMoney(itemQtyValueOf(x.key))]);
+  const itemQtyFooter = ['الإجمالي', fmt(byItemQty.reduce((s, x) => s + x.sum, 0)), fmtMoney(byItemQty.reduce((s, x) => s + itemQtyValueOf(x.key), 0))];
 
   el.innerHTML = `
     <div class="table-title">أعلى 20 صنف مبيعًا (بالقيمة)</div>
     <div class="grid2">
       <div class="chart-box"><canvas id="chItemsValue"></canvas></div>
-      <div class="table-wrap">${tableHTML(itemValueHeaders, itemValueRows)}</div>
+      <div class="table-wrap">${tableHTML(itemValueHeaders, itemValueRows, itemValueFooter)}</div>
     </div>
     <div class="table-title">أعلى 20 صنف مبيعًا (بالكمية)</div>
-    <div class="table-wrap">${tableHTML(['الصنف', 'إجمالي الكمية', 'القيمة'], byItemQty.map(x => [x.key, fmt(x.sum), fmtMoney(groupSum(rows.filter(r => r.item === x.key), () => 1, r => r.total)[0]?.sum || 0)]))}</div>
+    <div class="table-wrap">${tableHTML(['الصنف', 'إجمالي الكمية', 'القيمة'], itemQtyRows, itemQtyFooter)}</div>
   `;
   makeChart('chItemsValue', barConfig(byItemValue.slice(0, 10).map(x => x.key), byItemValue.slice(0, 10).map(x => x.sum), 'القيمة', true));
 }
@@ -1533,10 +1566,17 @@ function renderBranches() {
     return [x.key, fmtMoney(x.sum), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
   });
 
+  const branchKeys = byBranch.map(x => x.key);
+  const totalDiscAll = inv.reduce((s, i) => s + i.__discount, 0);
+  const totalInvCount = byBranch.reduce((s, x) => s + x.count, 0);
+  const branchFooter = years.length >= 2
+    ? ['الإجمالي', ...yearColumnCells(sumYearTotalsBmap(branchBmap, branchKeys, years), '__TOTAL__', years, fmtMoney), fmtMoney(totalDiscAll), fmtPct(1), fmtMoney(total / (totalInvCount || 1))]
+    : ['الإجمالي', fmtMoney(total), fmtMoney(totalDiscAll), fmtPct(1), fmtMoney(total / (totalInvCount || 1))];
+
   el.innerHTML = `
     <div class="chart-box"><canvas id="chBranches"></canvas></div>
     <div class="table-title">تفاصيل الفروع</div>
-    <div class="table-wrap">${tableHTML(branchHeaders, rowsHtml)}</div>
+    <div class="table-wrap">${tableHTML(branchHeaders, rowsHtml, branchFooter)}</div>
   `;
   makeChart('chBranches', barConfig(byBranch.map(x => x.key), byBranch.map(x => x.sum), 'صافي المبيعات', true));
 }
@@ -1567,10 +1607,12 @@ function renderCustomers() {
   let unmatchedReturnVal = 0, unmatchedReturnCustCount = 0;
   retByCustNorm.forEach((val, k) => { if (!invCustomerNormKeys.has(k)) { unmatchedReturnVal += val; unmatchedReturnCustCount++; } });
 
+  const showPostReturnGrowth = hasReturns && retYearsShown.length >= 2;
   const custHeaders = (years.length >= 2
     ? ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', ...yearColumnHeaders(years)]
     : ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', 'الصافي بعد الخصم والضريبة']
-  ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : []);
+  ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : [])
+   .concat(showPostReturnGrowth ? ['نسبة النمو بعد المرتجع'] : []);
 
   const rowsHtml = top.map(x => {
     const invs = inv.filter(i => i['العميل'] === x.key);
@@ -1595,18 +1637,56 @@ function renderCustomers() {
         ? `<span style="color:${retPct >= 0.1 ? 'var(--bad)' : '#9A5B00'}; font-weight:700;">${fmtPct(retPct)}</span>`
         : fmtPct(0);
       base.push(...retCells, retPctCell, `<b>${fmtMoney(netAfterReturn)}</b>`);
+      if (showPostReturnGrowth) {
+        const salesYm = custBmap.get(x.key) || new Map();
+        const netAfterReturnVals = retYearsShown.map(y => (salesYm.get(y) || 0) - (retYm.get(y) || 0));
+        base.push(growthCellHTML(netAfterReturnVals[netAfterReturnVals.length - 2], netAfterReturnVals[netAfterReturnVals.length - 1]));
+      }
     }
     return base;
   });
 
   const byCash = groupSum(inv, i => i['نوع_البيع'], i => i.__net);
 
+  // صف الإجمالي لأعلى 30 عميل المعروضين في الجدول
+  const topKeys = top.map(x => x.key);
+  const topInvs = inv.filter(i => topKeys.includes(i['العميل']));
+  const topGross = topInvs.reduce((s, i) => s + i.__gross, 0);
+  const topDisc = topInvs.reduce((s, i) => s + i.__discount, 0);
+  const topTax = topInvs.reduce((s, i) => s + i.__tax, 0);
+  const topNet = top.reduce((s, x) => s + x.sum, 0);
+  const topDiscPct = topGross ? topDisc / topGross : 0;
+  const custFooterBase = years.length >= 2
+    ? ['الإجمالي', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), ...yearColumnCells(sumYearTotalsBmap(custBmap, topKeys, years), '__TOTAL__', years, fmtMoney)]
+    : ['الإجمالي', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), `<b>${fmtMoney(topNet)}</b>`];
+  let custFooter = custFooterBase;
+  if (hasReturns) {
+    const topNormKeys = topKeys.map(k => SalesParser.normalizeCustomerKey(k));
+    const retTotalYm = sumYearTotalsBmap(retYearBmap, topNormKeys, retYearsShown).get('__TOTAL__');
+    const retCellsFooter = retYearsShown.map(y => {
+      const v = retTotalYm.get(y) || 0;
+      return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
+    });
+    const topReturnsTotal = topNormKeys.reduce((s, k) => s + (retByCustNorm.get(k) || 0), 0);
+    const topNetAfterReturn = topNet - topReturnsTotal;
+    const topRetPct = topNet ? topReturnsTotal / topNet : 0;
+    custFooter = custFooterBase.concat(retCellsFooter, [fmtPct(topRetPct), `<b>${fmtMoney(topNetAfterReturn)}</b>`]);
+    if (showPostReturnGrowth) {
+      const topSalesYm = sumYearTotalsBmap(custBmap, topKeys, years).get('__TOTAL__');
+      const topNetAfterReturnVals = retYearsShown.map(y => (topSalesYm.get(y) || 0) - (retTotalYm.get(y) || 0));
+      custFooter.push(growthCellHTML(topNetAfterReturnVals[topNetAfterReturnVals.length - 2], topNetAfterReturnVals[topNetAfterReturnVals.length - 1]));
+    }
+  }
+
   const totalReturns = returnRows.reduce((s, r) => s + (r['الإجمالي'] || 0), 0);
   const totalNetSalesAll = inv.reduce((s, i) => s + i.__net, 0);
   const overallRetPct = totalNetSalesAll ? totalReturns / totalNetSalesAll : 0;
+  const matchedReturns = totalReturns - unmatchedReturnVal;
+  const totalNetAfterReturns = totalNetSalesAll - matchedReturns;
   let returnsNote = '';
   if (hasReturns) {
     returnsNote = `<div class="pill-note">↩ إجمالي المرتجعات في الفترة المحددة: ${fmtMoney(totalReturns)} (${fmtPct(overallRetPct)} من إجمالي صافي المبيعات) - متخصومة من صافي كل عميل في الجدول تحت.</div>`;
+    returnsNote += `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✅ إجمالي صافي المبيعات بعد خصم المرتجعات (كل العملاء): <b>${fmtMoney(totalNetAfterReturns)}</b> (كان ${fmtMoney(totalNetSalesAll)} قبل خصم المرتجعات)</div>`;
     if (unmatchedReturnCustCount > 0) {
       returnsNote += `<div class="pill-note">⚠ ${fmtMoney(unmatchedReturnVal)} من المرتجعات (${unmatchedReturnCustCount} عميل) لأسماء عملاء مش موجودة في فواتير المبيعات المرفوعة حاليًا - راجع أسماء العملاء دي أو ارفع باقي ملفات المبيعات.</div>`;
     }
@@ -1619,7 +1699,7 @@ function renderCustomers() {
     </div>
     <div class="table-title">أعلى 30 عميل (مع الخصم والصافي بعد الخصم والضريبة${hasReturns ? ' والمرتجعات' : ''})</div>
     ${returnsNote}
-    <div class="table-wrap">${tableHTML(custHeaders, rowsHtml)}</div>
+    <div class="table-wrap">${tableHTML(custHeaders, rowsHtml, custFooter)}</div>
   `;
   makeChart('chTopCustomers', barConfig(top.slice(0, 10).map(x => x.key), top.slice(0, 10).map(x => x.sum), 'صافي المبيعات', true));
   makeChart('chCashCredit', pieConfig(byCash.map(x => x.key), byCash.map(x => x.sum)));
@@ -1647,6 +1727,13 @@ function renderReps() {
     }
     return [x.key, fmt(custs), fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1))];
   });
+  const repKeys = byRep.map(x => x.key);
+  const totalRepCustomers = new Set(inv.filter(i => i['المندوب']).map(i => i['العميل'])).size;
+  const totalRepNet = byRep.reduce((s, x) => s + x.sum, 0);
+  const totalRepCount = byRep.reduce((s, x) => s + x.count, 0);
+  const repFooter = years.length >= 2
+    ? ['الإجمالي', fmt(totalRepCustomers), ...yearColumnCells(sumYearTotalsBmap(repBmap, repKeys, years), '__TOTAL__', years, fmtMoney), fmtMoney(totalRepNet / (totalRepCount || 1))]
+    : ['الإجمالي', fmt(totalRepCustomers), fmtMoney(totalRepNet), fmtMoney(totalRepNet / (totalRepCount || 1))];
 
   const withRoute = inv.filter(i => i.__route);
   const withoutRoute = inv.filter(i => !i.__route);
@@ -1666,6 +1753,12 @@ function renderReps() {
     }
     return [x.key, region, sector, fmt(sites), fmtMoney(x.sum)];
   });
+  const routeKeys = byRoute.map(x => x.key);
+  const totalRouteSites = new Set(withRoute.map(i => i['فرع_العميل'])).size;
+  const totalRouteNet = byRoute.reduce((s, x) => s + x.sum, 0);
+  const routeFooter = years.length >= 2
+    ? ['الإجمالي', '-', '-', fmt(totalRouteSites), ...yearColumnCells(sumYearTotalsBmap(routeBmap, routeKeys, years), '__TOTAL__', years, fmtMoney)]
+    : ['الإجمالي', '-', '-', fmt(totalRouteSites), fmtMoney(totalRouteNet)];
 
   const coveragePct = inv.length ? withRoute.length / inv.length : 0;
   const warn = withoutRoute.length > 0
@@ -1676,11 +1769,11 @@ function renderReps() {
     <div class="table-title">أداء المناديب</div>
     <div class="grid2">
       <div class="chart-box"><canvas id="chReps"></canvas></div>
-      <div class="table-wrap">${tableHTML(repHeaders, repRows)}</div>
+      <div class="table-wrap">${tableHTML(repHeaders, repRows, repFooter)}</div>
     </div>
     <div class="table-title">أداء خطوط السير</div>
     ${warn}
-    <div class="table-wrap">${tableHTML(routeHeaders, routeRows)}</div>
+    <div class="table-wrap">${tableHTML(routeHeaders, routeRows, routeFooter)}</div>
   `;
   makeChart('chReps', barConfig(byRep.slice(0, 12).map(x => x.key), byRep.slice(0, 12).map(x => x.sum), 'صافي المبيعات', true));
 }
@@ -1695,11 +1788,14 @@ function renderQuarterly() {
   const byQ = groupSum(inv, key, i => i.__net);
   byQ.sort((a, b) => a.key.localeCompare(b.key));
   const rows = byQ.map(x => [x.key, fmtMoney(x.sum), fmtMoney(x.sum / (x.count || 1))]);
+  const qTotalNet = byQ.reduce((s, x) => s + x.sum, 0);
+  const qTotalCount = byQ.reduce((s, x) => s + x.count, 0);
+  const qFooter = ['الإجمالي', fmtMoney(qTotalNet), fmtMoney(qTotalNet / (qTotalCount || 1))];
 
   el.innerHTML = `
     <div class="chart-box"><canvas id="chQuarterly"></canvas></div>
     <div class="table-title">تفاصيل كل ربع سنة</div>
-    <div class="table-wrap">${tableHTML(['الربع', 'صافي المبيعات', 'متوسط الفاتورة'], rows)}</div>
+    <div class="table-wrap">${tableHTML(['الربع', 'صافي المبيعات', 'متوسط الفاتورة'], rows, qFooter)}</div>
   `;
   makeChart('chQuarterly', barConfig(byQ.map(x => x.key), byQ.map(x => x.sum), 'صافي المبيعات', false));
 }
@@ -1756,6 +1852,19 @@ function renderYoY() {
     return { b, cells, growthCell, last: cells[cells.length - 1] };
   }).sort((a, b) => b.last - a.last);
 
+  // صفوف الإجمالي
+  const yearTotalNet = byYear.reduce((s, x) => s + x.sum, 0);
+  const yearTotalCount = byYear.reduce((s, x) => s + x.count, 0);
+  const yearFooter = ['الإجمالي', fmtMoney(yearTotalNet), fmtMoney(yearTotalNet / (yearTotalCount || 1)), '-'];
+
+  const yearTotals = years.map(y => invCapped.filter(i => i.__year === y).reduce((s, i) => s + i.__net, 0));
+  let yearGrowthCell = '-';
+  if (yearTotals.length >= 2 && yearTotals[yearTotals.length - 2] > 0) {
+    yearGrowthCell = fmtPct((yearTotals[yearTotals.length - 1] - yearTotals[yearTotals.length - 2]) / yearTotals[yearTotals.length - 2]);
+  }
+  const actFooter = ['الإجمالي', ...yearTotals.map(c => fmtMoney(c)), yearGrowthCell];
+  const branchFooterYoY = ['الإجمالي', ...yearTotals.map(c => fmtMoney(c)), yearGrowthCell];
+
   const monthOptions = MONTH_NAMES_AR.map((name, idx) => {
     const m = idx + 1;
     return `<option value="${m}" ${m === cap ? 'selected' : ''}>حتى نهاية ${name}</option>`;
@@ -1770,26 +1879,4 @@ function renderYoY() {
     </div>
     <div class="chart-box"><canvas id="chYoY"></canvas></div>
     <div class="table-title">إجمالي المبيعات لكل سنة (حتى نهاية ${MONTH_NAMES_AR[cap - 1]})</div>
-    <div class="table-wrap">${tableHTML(['السنة', 'صافي المبيعات', 'متوسط الفاتورة', 'نمو عن السنة السابقة'], yearRows)}</div>
-    <div class="table-title">مقارنة كل نشاط بين السنوات</div>
-    <div class="table-wrap">${tableHTML(['النشاط', ...years.map(y => 'صافي ' + y), 'نمو آخر سنة'], actRows)}</div>
-    <div class="table-title">مقارنة كل فرع بين السنوات</div>
-    <div class="table-wrap">${tableHTML(['الفرع', ...years.map(y => 'صافي ' + y), 'نمو آخر سنة'], branchRows.map(r => [r.b, ...r.cells.map(c => fmtMoney(c)), r.growthCell]))}</div>
-  `;
-  makeChart('chYoY', barConfig(byYear.map(x => x.key), byYear.map(x => x.sum), 'صافي المبيعات', false));
-
-  document.getElementById('yoyMonthSelect').addEventListener('change', (e) => {
-    state.yoyUpToMonth = Number(e.target.value);
-    renderYoY();
-  });
-}
-
-  window.__APP_STATE__ = state; // debug/testing hook
-
-  window.renderAll = renderAll;
-  window.__appInternal = { filteredInvoices, filteredItemRows, groupSum, topN, fmt, fmtMoney, fmtPct, makeChart, barConfig, pieConfig, lineConfig };
-})();
-
-</script>
-</body>
-</html>
+    <div class="table-wrap">${tableHTML(['السنة'
