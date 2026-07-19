@@ -1524,7 +1524,7 @@ function renderOverview() {
       <div class="kpi"><div class="kv">${fmt(nInv)}</div><div class="kl">عدد الفواتير</div></div>
       <div class="kpi"><div class="kv">${fmtMoney(avgInvoice)}</div><div class="kl">متوسط قيمة الفاتورة</div></div>
       <div class="kpi"><div class="kv">${fmt(customers)}</div><div class="kl">عدد العملاء</div></div>
-      <div class="kpi"><div class="kv">${fmtMoney(totalDisc)}</div><div class="kl">إجمالي الخصومات (${fmtPct(discPct)})</div></div>
+      <div class="kpi"><div class="kv">${fmtMoney(totalDisc)}</div><div class="kl">إجمالي الخصم المباشر (${fmtPct(discPct)})</div></div>
       <div class="kpi"><div class="kv">${fmtMoney(totalTax)}</div><div class="kl">إجمالي الضريبة</div></div>
       ${growthHtml}
     </div>
@@ -1653,8 +1653,8 @@ function renderBranches() {
   retByBranchTotal.forEach((val, k) => { if (!allInvoiceBranchKeys.has(k)) { unmatchedBranchReturnVal += val; unmatchedBranchCount++; } });
 
   const branchHeaders = (years.length >= 2
-    ? ['الفرع', ...yearColumnHeaders(years), 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة']
-    : ['الفرع', 'صافي المبيعات', 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة']
+    ? ['الفرع', ...yearColumnHeaders(years), 'إجمالي الخصم المباشر', 'نسبة من الإجمالي', 'متوسط الفاتورة']
+    : ['الفرع', 'صافي المبيعات', 'إجمالي الخصم المباشر', 'نسبة من الإجمالي', 'متوسط الفاتورة']
   ).concat(hasBranchReturns ? [...retYearsShownBranch.map(y => 'مرتجع ' + y), 'الصافي بعد المرتجع'] : []);
 
   const rowsHtml = byBranch.map(x => {
@@ -1731,8 +1731,8 @@ function renderCustomers() {
 
   const showPostReturnGrowth = hasReturns && retYearsShown.length >= 2;
   const custHeaders = (years.length >= 2
-    ? ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', ...yearColumnHeaders(years)]
-    : ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', 'الصافي بعد الخصم والضريبة']
+    ? ['العميل', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', ...yearColumnHeaders(years)]
+    : ['العميل', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', 'الصافي بعد الخصم المباشر والضريبة']
   ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : [])
    .concat(showPostReturnGrowth ? ['نسبة النمو بعد المرتجع'] : []);
 
@@ -1819,7 +1819,7 @@ function renderCustomers() {
       <div class="chart-box"><canvas id="chTopCustomers"></canvas></div>
       <div class="chart-box"><canvas id="chCashCredit"></canvas></div>
     </div>
-    <div class="table-title">أعلى 30 عميل (مع الخصم والصافي بعد الخصم والضريبة${hasReturns ? ' والمرتجعات' : ''})</div>
+    <div class="table-title">أعلى 30 عميل (مع الخصم المباشر والصافي بعد الخصم المباشر والضريبة${hasReturns ? ' والمرتجعات' : ''})</div>
     ${returnsNote}
     <div class="table-wrap">${tableHTML(custHeaders, rowsHtml, custFooter)}</div>
   `;
