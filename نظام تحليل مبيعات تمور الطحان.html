@@ -1570,7 +1570,7 @@ function renderCustomers() {
   const custHeaders = (years.length >= 2
     ? ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', ...yearColumnHeaders(years)]
     : ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', 'الصافي بعد الخصم والضريبة']
-  ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'الصافي بعد المرتجع'] : []);
+  ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : []);
 
   const rowsHtml = top.map(x => {
     const invs = inv.filter(i => i['العميل'] === x.key);
@@ -1590,7 +1590,11 @@ function renderCustomers() {
       });
       const retValTotal = retByCustNorm.get(normKey) || 0;
       const netAfterReturn = x.sum - retValTotal;
-      base.push(...retCells, `<b>${fmtMoney(netAfterReturn)}</b>`);
+      const retPct = x.sum ? retValTotal / x.sum : 0;
+      const retPctCell = retValTotal
+        ? `<span style="color:${retPct >= 0.1 ? 'var(--bad)' : '#9A5B00'}; font-weight:700;">${fmtPct(retPct)}</span>`
+        : fmtPct(0);
+      base.push(...retCells, retPctCell, `<b>${fmtMoney(netAfterReturn)}</b>`);
     }
     return base;
   });
@@ -1598,9 +1602,11 @@ function renderCustomers() {
   const byCash = groupSum(inv, i => i['نوع_البيع'], i => i.__net);
 
   const totalReturns = returnRows.reduce((s, r) => s + (r['الإجمالي'] || 0), 0);
+  const totalNetSalesAll = inv.reduce((s, i) => s + i.__net, 0);
+  const overallRetPct = totalNetSalesAll ? totalReturns / totalNetSalesAll : 0;
   let returnsNote = '';
   if (hasReturns) {
-    returnsNote = `<div class="pill-note">↩ إجمالي المرتجعات في الفترة المحددة: ${fmtMoney(totalReturns)} - متخصومة من صافي كل عميل في الجدول تحت.</div>`;
+    returnsNote = `<div class="pill-note">↩ إجمالي المرتجعات في الفترة المحددة: ${fmtMoney(totalReturns)} (${fmtPct(overallRetPct)} من إجمالي صافي المبيعات) - متخصومة من صافي كل عميل في الجدول تحت.</div>`;
     if (unmatchedReturnCustCount > 0) {
       returnsNote += `<div class="pill-note">⚠ ${fmtMoney(unmatchedReturnVal)} من المرتجعات (${unmatchedReturnCustCount} عميل) لأسماء عملاء مش موجودة في فواتير المبيعات المرفوعة حاليًا - راجع أسماء العملاء دي أو ارفع باقي ملفات المبيعات.</div>`;
     }
