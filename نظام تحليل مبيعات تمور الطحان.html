@@ -657,11 +657,12 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       lineCounters[invKey] = lineNo + 1;
       const dateVal = cell(row, 'تاريخ الفاتورة');
       const customer = (cell(row, 'إسم العميل') || '').toString().trim();
+      const trimCell = (key) => { const v = cell(row, key); return v === null || v === undefined ? v : String(v).trim(); };
       returns.push({
         رقم_الفاتورة: invoiceNo,
         __lineNo: lineNo,
         التاريخ: dateVal instanceof Date ? dateVal : null,
-        الفرع: cell(row, 'الفرع'),
+        الفرع: trimCell('الفرع'),
         العميل: customer,
         __عميل_مطابق: normalizeCustomerKey(customer),
         كود_العميل: cell(row, 'كود العميل'),
@@ -669,7 +670,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
         المنطقة: cell(row, 'المنطقة'),
         الحى: cell(row, 'الحى'),
         المحافظة: cell(row, 'المحافظة'),
-        الصنف: cell(row, 'الصنف'),
+        الصنف: trimCell('الصنف'),
         كود_الصنف: cell(row, 'كود الصنف'),
         الوحدة: cell(row, 'الوحدة'),
         سعر_ص: Number(cell(row, 'سعر الوحدة ص')) || 0,
@@ -1552,22 +1553,62 @@ function renderItems() {
 
   const years = activeYears(rows, r => r.year);
   const itemBmap = yearBreakdownMap(rows, r => r.item, r => r.year, r => r.total);
-  const itemValueHeaders = years.length >= 2 ? ['الصنف', ...yearColumnHeaders(years, 'قيمة '), 'عدد مرات البيع'] : ['الصنف', 'القيمة', 'عدد مرات البيع'];
-  const itemValueRows = byItemValue.map(x => years.length >= 2
-    ? [x.key, ...yearColumnCells(itemBmap, x.key, years, fmtMoney), fmt(x.count)]
-    : [x.key, fmtMoney(x.sum), fmt(x.count)]);
+
+  // مرتجعات مربوطة بالصنف (شيت المرتجعات فيه عمود "الصنف" فعلًا، فمفيش داعي لمطابقة تقريبية زي العملاء)
+  const returnRows = filteredReturns();
+  const hasItemReturns = returnRows.some(r => r['الصنف']);
+  const retItemBmap = yearBreakdownMap(returnRows, r => r['الصنف'], r => r.__year, r => r['الإجمالي']);
+  const retByItemTotal = new Map();
+  returnRows.forEach(r => { const k = r['الصنف']; if (!k) return; retByItemTotal.set(k, (retByItemTotal.get(k) || 0) + (r['الإجمالي'] || 0)); });
+  const retYearsShownItems = years.length ? years : activeYears(returnRows, r => r.__year);
+  const allInvoiceItemKeys = new Set(rows.map(r => r.item));
+  let unmatchedItemReturnVal = 0, unmatchedItemCount = 0;
+  retByItemTotal.forEach((val, k) => { if (!allInvoiceItemKeys.has(k)) { unmatchedItemReturnVal += val; unmatchedItemCount++; } });
+
+  const itemValueHeaders = (years.length >= 2 ? ['الصنف', ...yearColumnHeaders(years, 'قيمة '), 'عدد مرات البيع'] : ['الصنف', 'القيمة', 'عدد مرات البيع'])
+    .concat(hasItemReturns ? [...retYearsShownItems.map(y => 'مرتجع ' + y), 'الصافي بعد المرتجع'] : []);
+  const itemValueRows = byItemValue.map(x => {
+    const base = years.length >= 2
+      ? [x.key, ...yearColumnCells(itemBmap, x.key, years, fmtMoney), fmt(x.count)]
+      : [x.key, fmtMoney(x.sum), fmt(x.count)];
+    if (hasItemReturns) {
+      const retYm = retItemBmap.get(x.key) || new Map();
+      const retCells = retYearsShownItems.map(y => {
+        const v = retYm.get(y) || 0;
+        return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
+      });
+      const retTotal = retByItemTotal.get(x.key) || 0;
+      base.push(...retCells, `<b>${fmtMoney(x.sum - retTotal)}</b>`);
+    }
+    return base;
+  });
   const itemValueKeys = byItemValue.map(x => x.key);
   const itemValueTotalCount = byItemValue.reduce((s, x) => s + x.count, 0);
-  const itemValueFooter = years.length >= 2
+  const itemValueTotalSum = byItemValue.reduce((s, x) => s + x.sum, 0);
+  const itemValueFooter = (years.length >= 2
     ? ['الإجمالي', ...yearColumnCells(sumYearTotalsBmap(itemBmap, itemValueKeys, years), '__TOTAL__', years, fmtMoney), fmt(itemValueTotalCount)]
-    : ['الإجمالي', fmtMoney(byItemValue.reduce((s, x) => s + x.sum, 0)), fmt(itemValueTotalCount)];
+    : ['الإجمالي', fmtMoney(itemValueTotalSum), fmt(itemValueTotalCount)]);
+  if (hasItemReturns) {
+    const retTotalYm = sumYearTotalsBmap(retItemBmap, itemValueKeys, retYearsShownItems).get('__TOTAL__');
+    const retCellsFooter = retYearsShownItems.map(y => {
+      const v = retTotalYm.get(y) || 0;
+      return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
+    });
+    const itemsReturnsTotal = itemValueKeys.reduce((s, k) => s + (retByItemTotal.get(k) || 0), 0);
+    itemValueFooter.push(...retCellsFooter, `<b>${fmtMoney(itemValueTotalSum - itemsReturnsTotal)}</b>`);
+  }
 
   const itemQtyValueOf = (key) => groupSum(rows.filter(r => r.item === key), () => 1, r => r.total)[0]?.sum || 0;
   const itemQtyRows = byItemQty.map(x => [x.key, fmt(x.sum), fmtMoney(itemQtyValueOf(x.key))]);
   const itemQtyFooter = ['الإجمالي', fmt(byItemQty.reduce((s, x) => s + x.sum, 0)), fmtMoney(byItemQty.reduce((s, x) => s + itemQtyValueOf(x.key), 0))];
 
+  const itemReturnsWarn = (hasItemReturns && unmatchedItemCount > 0)
+    ? `<div class="pill-note">⚠ ${fmtMoney(unmatchedItemReturnVal)} من المرتجعات (${fmt(unmatchedItemCount)} صنف) لأسماء أصناف مش موجودة في فواتير المبيعات المرفوعة حاليًا - غالبًا أصناف من نشاط لسه متتحملش.</div>`
+    : '';
+
   el.innerHTML = `
-    <div class="table-title">أعلى 20 صنف مبيعًا (بالقيمة)</div>
+    <div class="table-title">أعلى 20 صنف مبيعًا (بالقيمة)${hasItemReturns ? ' والمرتجعات' : ''}</div>
+    ${itemReturnsWarn}
     <div class="grid2">
       <div class="chart-box"><canvas id="chItemsValue"></canvas></div>
       <div class="table-wrap">${tableHTML(itemValueHeaders, itemValueRows, itemValueFooter)}</div>
@@ -1589,27 +1630,64 @@ function renderBranches() {
   const total = byBranch.reduce((s, x) => s + x.sum, 0);
   const years = activeYears(inv, i => i.__year);
   const branchBmap = yearBreakdownMap(inv, i => i['الفرع'], i => i.__year, i => i.__net);
-  const branchHeaders = years.length >= 2
+
+  // مرتجعات مربوطة بالفرع (شيت المرتجعات فيه عمود "الفرع" فعلًا)
+  const returnRows = filteredReturns();
+  const hasBranchReturns = returnRows.some(r => r['الفرع']);
+  const retBranchBmap = yearBreakdownMap(returnRows, r => r['الفرع'], r => r.__year, r => r['الإجمالي']);
+  const retByBranchTotal = new Map();
+  returnRows.forEach(r => { const k = r['الفرع']; if (!k) return; retByBranchTotal.set(k, (retByBranchTotal.get(k) || 0) + (r['الإجمالي'] || 0)); });
+  const retYearsShownBranch = years.length ? years : activeYears(returnRows, r => r.__year);
+  const allInvoiceBranchKeys = new Set(inv.map(i => i['الفرع']));
+  let unmatchedBranchReturnVal = 0, unmatchedBranchCount = 0;
+  retByBranchTotal.forEach((val, k) => { if (!allInvoiceBranchKeys.has(k)) { unmatchedBranchReturnVal += val; unmatchedBranchCount++; } });
+
+  const branchHeaders = (years.length >= 2
     ? ['الفرع', ...yearColumnHeaders(years), 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة']
-    : ['الفرع', 'صافي المبيعات', 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة'];
+    : ['الفرع', 'صافي المبيعات', 'إجمالي الخصومات', 'نسبة من الإجمالي', 'متوسط الفاتورة']
+  ).concat(hasBranchReturns ? [...retYearsShownBranch.map(y => 'مرتجع ' + y), 'الصافي بعد المرتجع'] : []);
+
   const rowsHtml = byBranch.map(x => {
     const discX = inv.filter(i => i['الفرع'] === x.key).reduce((s, i) => s + i.__discount, 0);
-    if (years.length >= 2) {
-      return [x.key, ...yearColumnCells(branchBmap, x.key, years, fmtMoney), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
+    const base = years.length >= 2
+      ? [x.key, ...yearColumnCells(branchBmap, x.key, years, fmtMoney), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))]
+      : [x.key, fmtMoney(x.sum), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
+    if (hasBranchReturns) {
+      const retYm = retBranchBmap.get(x.key) || new Map();
+      const retCells = retYearsShownBranch.map(y => {
+        const v = retYm.get(y) || 0;
+        return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
+      });
+      const retTotal = retByBranchTotal.get(x.key) || 0;
+      base.push(...retCells, `<b>${fmtMoney(x.sum - retTotal)}</b>`);
     }
-    return [x.key, fmtMoney(x.sum), fmtMoney(discX), fmtPct(total ? x.sum / total : 0), fmtMoney(x.sum / (x.count || 1))];
+    return base;
   });
 
   const branchKeys = byBranch.map(x => x.key);
   const totalDiscAll = inv.reduce((s, i) => s + i.__discount, 0);
   const totalInvCount = byBranch.reduce((s, x) => s + x.count, 0);
-  const branchFooter = years.length >= 2
+  const branchFooter = (years.length >= 2
     ? ['الإجمالي', ...yearColumnCells(sumYearTotalsBmap(branchBmap, branchKeys, years), '__TOTAL__', years, fmtMoney), fmtMoney(totalDiscAll), fmtPct(1), fmtMoney(total / (totalInvCount || 1))]
-    : ['الإجمالي', fmtMoney(total), fmtMoney(totalDiscAll), fmtPct(1), fmtMoney(total / (totalInvCount || 1))];
+    : ['الإجمالي', fmtMoney(total), fmtMoney(totalDiscAll), fmtPct(1), fmtMoney(total / (totalInvCount || 1))]);
+  if (hasBranchReturns) {
+    const retTotalYm = sumYearTotalsBmap(retBranchBmap, branchKeys, retYearsShownBranch).get('__TOTAL__');
+    const retCellsFooter = retYearsShownBranch.map(y => {
+      const v = retTotalYm.get(y) || 0;
+      return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
+    });
+    const branchesReturnsTotal = branchKeys.reduce((s, k) => s + (retByBranchTotal.get(k) || 0), 0);
+    branchFooter.push(...retCellsFooter, `<b>${fmtMoney(total - branchesReturnsTotal)}</b>`);
+  }
+
+  const branchReturnsWarn = (hasBranchReturns && unmatchedBranchCount > 0)
+    ? `<div class="pill-note">⚠ ${fmtMoney(unmatchedBranchReturnVal)} من المرتجعات (${fmt(unmatchedBranchCount)} فرع) لأسماء فروع مش موجودة في فواتير المبيعات المرفوعة حاليًا - راجع الفروع دي أو ارفع باقي ملفات المبيعات.</div>`
+    : '';
 
   el.innerHTML = `
     <div class="chart-box"><canvas id="chBranches"></canvas></div>
-    <div class="table-title">تفاصيل الفروع</div>
+    <div class="table-title">تفاصيل الفروع${hasBranchReturns ? ' والمرتجعات' : ''}</div>
+    ${branchReturnsWarn}
     <div class="table-wrap">${tableHTML(branchHeaders, rowsHtml, branchFooter)}</div>
   `;
   makeChart('chBranches', barConfig(byBranch.map(x => x.key), byBranch.map(x => x.sum), 'صافي المبيعات', true));
