@@ -189,6 +189,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   position: fixed; bottom: 24px; left: 24px; z-index: 50;
 }
 
+.print-only { display: none; }
+
 @media print {
   * {
     -webkit-print-color-adjust: exact !important;
@@ -199,8 +201,9 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   body { background: #fff; }
   .card, .chart-box { box-shadow:none; border:1px solid #ddd; }
   .filterbar { display:none !important; }
-  .tabpanel { display: block !important; page-break-before: always; }
-  .tabpanel:first-of-type { page-break-before: auto; }
+  .print-only { display: block !important; margin: 4px 28px 12px; font-size: 12.5px; font-weight: 700; color: var(--ink-soft); background: var(--sand); border-radius: 8px; padding: 8px 14px; }
+  .tabpanel { display: none !important; }
+  .tabpanel.active { display: block !important; page-break-before: auto; }
   .table-wrap { max-height: none; overflow: visible; }
   .kpi-grid { page-break-inside: avoid; }
   .app-header { page-break-after: avoid; }
@@ -285,14 +288,16 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     </div>
 
     <div class="tabbar no-print">
-      <button class="tabbtn active" data-tab="panel-overview">نظرة عامة</button>
-      <button class="tabbtn" data-tab="panel-items">الأصناف</button>
-      <button class="tabbtn" data-tab="panel-branches">الفروع</button>
-      <button class="tabbtn" data-tab="panel-customers">العملاء</button>
-      <button class="tabbtn" data-tab="panel-reps">المناديب وخطوط السير</button>
-      <button class="tabbtn" data-tab="panel-quarterly">الأرباع</button>
-      <button class="tabbtn" data-tab="panel-yoy">مقارنة سنوية</button>
+      <button class="tabbtn active" data-tab="panel-overview" data-label="نظرة عامة">نظرة عامة</button>
+      <button class="tabbtn" data-tab="panel-items" data-label="الأصناف">الأصناف</button>
+      <button class="tabbtn" data-tab="panel-branches" data-label="الفروع">الفروع</button>
+      <button class="tabbtn" data-tab="panel-customers" data-label="العملاء">العملاء</button>
+      <button class="tabbtn" data-tab="panel-reps" data-label="المناديب وخطوط السير">المناديب وخطوط السير</button>
+      <button class="tabbtn" data-tab="panel-quarterly" data-label="الأرباع">الأرباع</button>
+      <button class="tabbtn" data-tab="panel-yoy" data-label="مقارنة سنوية">مقارنة سنوية</button>
     </div>
+
+    <div class="print-only" id="printFilterSummary"></div>
 
     <div class="card">
       <div class="tabpanel active" id="panel-overview"></div>
@@ -305,7 +310,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     </div>
   </div>
 
-  <button class="btn no-print" id="printBtn" onclick="window.print()">🖨️ طباعة تقرير PDF</button>
+  <button class="btn no-print" id="printBtn" onclick="printCurrentTab()">🖨️ طباعة PDF - نظرة عامة</button>
   </div>
 </div>
 
@@ -1265,8 +1270,10 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       panel.classList.toggle('open');
     });
   });
-  document.addEventListener('click', () => {
-    document.querySelectorAll('.ms-panel.open').forEach(p => p.classList.remove('open'));
+  document.addEventListener('click', (e) => {
+    document.querySelectorAll('.ms-panel.open').forEach(p => {
+      if (!p.contains(e.target)) p.classList.remove('open');
+    });
   });
 
   function matchFilter(key, value) {
@@ -1317,14 +1324,40 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   function topN(arr, n) { return arr.slice().sort((a, b) => b.sum - a.sum).slice(0, n); }
 
   /* ---------------- Tabs ---------------- */
+  function updatePrintBtnLabel() {
+    const printBtn = document.getElementById('printBtn');
+    const activeTabBtn = document.querySelector('.tabbtn.active');
+    if (printBtn && activeTabBtn) {
+      printBtn.textContent = '🖨️ طباعة PDF - ' + (activeTabBtn.dataset.label || activeTabBtn.textContent);
+    }
+  }
   document.querySelectorAll('.tabbtn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tabbtn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(btn.dataset.tab).classList.add('active');
+      updatePrintBtnLabel();
     });
   });
+  updatePrintBtnLabel();
+
+  function renderPrintFilterSummary() {
+    const el = document.getElementById('printFilterSummary');
+    if (!el) return;
+    const parts = [];
+    ['activity', 'branch', 'year', 'month', 'rep'].forEach(key => {
+      const sel = state.filters[key];
+      if (sel.length) {
+        parts.push(FILTER_LABELS[key] + ': ' + sel.map(v => filterValueLabel(key, v)).join('، '));
+      }
+    });
+    el.textContent = 'الفلاتر المطبقة: ' + (parts.length ? parts.join('  |  ') : 'بدون فلاتر (كل البيانات)');
+  }
+  window.printCurrentTab = function () {
+    renderPrintFilterSummary();
+    window.print();
+  };
 
   /* ---------------- Chart helper ---------------- */
   function makeChart(canvasId, config) {
@@ -1370,6 +1403,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     renderReps();
     renderQuarterly();
     renderYoY();
+    renderPrintFilterSummary();
   }
 
   initLoginFlow();
