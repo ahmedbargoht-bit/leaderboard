@@ -1560,6 +1560,9 @@ function renderCustomers() {
     const k = r.__عميل_مطابق;
     retByCustNorm.set(k, (retByCustNorm.get(k) || 0) + (r['الإجمالي'] || 0));
   });
+  const retYearBmap = yearBreakdownMap(returnRows, r => r.__عميل_مطابق, r => r.__year, r => r['الإجمالي']);
+  const returnYears = activeYears(returnRows, r => r.__year);
+  const retYearsShown = years.length ? years : returnYears; // نفس أعمدة سنوات المبيعات عشان تتقارن جنب بعض
   const invCustomerNormKeys = new Set(inv.map(i => SalesParser.normalizeCustomerKey(i['العميل'])));
   let unmatchedReturnVal = 0, unmatchedReturnCustCount = 0;
   retByCustNorm.forEach((val, k) => { if (!invCustomerNormKeys.has(k)) { unmatchedReturnVal += val; unmatchedReturnCustCount++; } });
@@ -1567,7 +1570,7 @@ function renderCustomers() {
   const custHeaders = (years.length >= 2
     ? ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', ...yearColumnHeaders(years)]
     : ['العميل', 'إجمالي قبل الخصم', 'الخصم', 'نسبة الخصم', 'الضريبة', 'الصافي بعد الخصم والضريبة']
-  ).concat(hasReturns ? ['قيمة المرتجعات', 'الصافي بعد المرتجع'] : []);
+  ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'الصافي بعد المرتجع'] : []);
 
   const rowsHtml = top.map(x => {
     const invs = inv.filter(i => i['العميل'] === x.key);
@@ -1579,12 +1582,15 @@ function renderCustomers() {
       ? [x.key, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)]
       : [x.key, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
     if (hasReturns) {
-      const retVal = retByCustNorm.get(SalesParser.normalizeCustomerKey(x.key)) || 0;
-      const netAfterReturn = x.sum - retVal;
-      base.push(
-        retVal ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(retVal)}</span>` : fmtMoney(0),
-        `<b>${fmtMoney(netAfterReturn)}</b>`
-      );
+      const normKey = SalesParser.normalizeCustomerKey(x.key);
+      const retYm = retYearBmap.get(normKey) || new Map();
+      const retCells = retYearsShown.map(y => {
+        const v = retYm.get(y) || 0;
+        return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
+      });
+      const retValTotal = retByCustNorm.get(normKey) || 0;
+      const netAfterReturn = x.sum - retValTotal;
+      base.push(...retCells, `<b>${fmtMoney(netAfterReturn)}</b>`);
     }
     return base;
   });
