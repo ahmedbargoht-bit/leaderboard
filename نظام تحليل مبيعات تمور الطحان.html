@@ -285,6 +285,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       <div class="msfilter"><button type="button" class="ms-btn" id="msBtn-year">السنة: الكل ▾</button><div class="ms-panel" id="msPanel-year"></div></div>
       <div class="msfilter"><button type="button" class="ms-btn" id="msBtn-month">الشهر: الكل ▾</button><div class="ms-panel" id="msPanel-month"></div></div>
       <div class="msfilter"><button type="button" class="ms-btn" id="msBtn-rep">المندوب: الكل ▾</button><div class="ms-panel" id="msPanel-rep"></div></div>
+      <div class="msfilter"><button type="button" class="ms-btn" id="msBtn-item">الصنف: الكل ▾</button><div class="ms-panel" id="msPanel-item"></div></div>
     </div>
 
     <div class="tabbar no-print">
@@ -705,11 +706,11 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     returns: [],        // flattened parsed return lines (شيت المرتجع)
     routeIndex: null,
     charts: {},
-    filters: { activity: [], branch: [], year: [], month: [], rep: [] }, // [] = الكل (كل القيم)
+    filters: { activity: [], branch: [], year: [], month: [], rep: [], item: [] }, // [] = الكل (كل القيم)
     yoyUpToMonth: null  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
   };
 
-  const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب' };
+  const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
   const FILTER_VALUE_LABEL = { month: m => MONTH_NAMES_AR[m - 1] || m };
   function filterValueLabel(key, v) { return (FILTER_VALUE_LABEL[key] || (x => x))(v); }
 
@@ -730,7 +731,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     if (n === null || n === undefined || isNaN(n)) return '-';
     return Number(n).toLocaleString('en-US', { minimumFractionDigits: decimals || 0, maximumFractionDigits: decimals || 0 });
   }
-  function fmtMoney(n) { return fmt(n, 0) + ' ج.م'; }
+  function fmtMoney(n) { return fmt(n, 0); }
   function fmtPct(n) { return (n * 100).toFixed(1) + '%'; }
 
   function uid() { return Math.random().toString(36).slice(2, 10); }
@@ -1142,7 +1143,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
 
     logStatus(`اكتمل التحليل: ${totalInv} فاتورة جديدة من هذه الدفعة (الإجمالي المعروض الآن: ${state.invoices.length} فاتورة، ${state.returns.length} سطر مرتجع)${totalErr ? '، ' + totalErr + ' سطر لم يتم التعرف عليه' : ''}`, 'ok');
 
-    state.filters = { activity: [], branch: [], year: [], month: [], rep: [] };
+    state.filters = { activity: [], branch: [], year: [], month: [], rep: [], item: [] };
     state.yoyUpToMonth = null;
 
     if (state.invoices.length) {
@@ -1213,7 +1214,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       branch: uniq(state.invoices.map(i => i['الفرع'])),
       year: uniq(state.invoices.map(i => i.__year)).sort((a, b) => a - b),
       month: uniq(state.invoices.map(i => i.__month)).sort((a, b) => a - b),
-      rep: uniq(state.invoices.map(i => i['المندوب']))
+      rep: uniq(state.invoices.map(i => i['المندوب'])),
+      item: uniq(state.itemRows.map(r => r.item)).sort((a, b) => String(a).localeCompare(String(b), 'ar'))
     };
     Object.keys(valuesByKey).forEach(key => buildMultiSelect(key, valuesByKey[key], FILTER_VALUE_LABEL[key]));
   }
@@ -1296,16 +1298,18 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       matchFilter('branch', r.branch) &&
       matchFilter('year', r.year) &&
       matchFilter('month', r.monthNum) &&
-      matchFilter('rep', r.rep)
+      matchFilter('rep', r.rep) &&
+      matchFilter('item', r.item)
     );
   }
   function filteredReturns() {
-    // ملف المرتجعات معندوش مندوب، فبنفلتر بالنشاط/الفرع/السنة/الشهر بس
+    // ملف المرتجعات معندوش مندوب، فبنفلتر بالنشاط/الفرع/السنة/الشهر/الصنف بس
     return state.returns.filter(r =>
       matchFilter('activity', r.__activity) &&
       matchFilter('branch', r['الفرع']) &&
       matchFilter('year', r.__year) &&
-      matchFilter('month', r.__month)
+      matchFilter('month', r.__month) &&
+      matchFilter('item', r['الصنف'])
     );
   }
 
@@ -1347,7 +1351,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     const el = document.getElementById('printFilterSummary');
     if (!el) return;
     const parts = [];
-    ['activity', 'branch', 'year', 'month', 'rep'].forEach(key => {
+    ['activity', 'branch', 'year', 'month', 'rep', 'item'].forEach(key => {
       const sel = state.filters[key];
       if (sel.length) {
         parts.push(FILTER_LABELS[key] + ': ' + sel.map(v => filterValueLabel(key, v)).join('، '));
@@ -1548,8 +1552,8 @@ function renderItems() {
   const el = document.getElementById('panel-items');
   if (!rows.length) { el.innerHTML = emptyState('لا توجد بيانات أصناف'); return; }
 
-  const byItemValue = topN(groupSum(rows, r => r.item, r => r.total), 20);
-  const byItemQty = topN(groupSum(rows, r => r.item, r => (r.qtyCarton || 0) + (r.qtyPiece || 0)), 20);
+  const byItemValue = groupSum(rows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
+  const byItemQty = groupSum(rows, r => r.item, r => (r.qtyCarton || 0) + (r.qtyPiece || 0)).sort((a, b) => b.sum - a.sum);
 
   const years = activeYears(rows, r => r.year);
   const itemBmap = yearBreakdownMap(rows, r => r.item, r => r.year, r => r.total);
@@ -1566,7 +1570,7 @@ function renderItems() {
   retByItemTotal.forEach((val, k) => { if (!allInvoiceItemKeys.has(k)) { unmatchedItemReturnVal += val; unmatchedItemCount++; } });
 
   const itemValueHeaders = (years.length >= 2 ? ['الصنف', ...yearColumnHeaders(years, 'قيمة '), 'عدد مرات البيع'] : ['الصنف', 'القيمة', 'عدد مرات البيع'])
-    .concat(hasItemReturns ? [...retYearsShownItems.map(y => 'مرتجع ' + y), 'الصافي بعد المرتجع'] : []);
+    .concat(hasItemReturns ? [...retYearsShownItems.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : []);
   const itemValueRows = byItemValue.map(x => {
     const base = years.length >= 2
       ? [x.key, ...yearColumnCells(itemBmap, x.key, years, fmtMoney), fmt(x.count)]
@@ -1578,7 +1582,11 @@ function renderItems() {
         return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
       });
       const retTotal = retByItemTotal.get(x.key) || 0;
-      base.push(...retCells, `<b>${fmtMoney(x.sum - retTotal)}</b>`);
+      const retPct = x.sum ? retTotal / x.sum : 0;
+      const retPctCell = retTotal
+        ? `<span style="color:${retPct >= 0.1 ? 'var(--bad)' : '#9A5B00'}; font-weight:700;">${fmtPct(retPct)}</span>`
+        : fmtPct(0);
+      base.push(...retCells, retPctCell, `<b>${fmtMoney(x.sum - retTotal)}</b>`);
     }
     return base;
   });
@@ -1595,7 +1603,8 @@ function renderItems() {
       return v ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(v)}</span>` : fmtMoney(0);
     });
     const itemsReturnsTotal = itemValueKeys.reduce((s, k) => s + (retByItemTotal.get(k) || 0), 0);
-    itemValueFooter.push(...retCellsFooter, `<b>${fmtMoney(itemValueTotalSum - itemsReturnsTotal)}</b>`);
+    const itemsRetPct = itemValueTotalSum ? itemsReturnsTotal / itemValueTotalSum : 0;
+    itemValueFooter.push(...retCellsFooter, fmtPct(itemsRetPct), `<b>${fmtMoney(itemValueTotalSum - itemsReturnsTotal)}</b>`);
   }
 
   const itemQtyValueOf = (key) => groupSum(rows.filter(r => r.item === key), () => 1, r => r.total)[0]?.sum || 0;
@@ -1607,16 +1616,17 @@ function renderItems() {
     : '';
 
   el.innerHTML = `
-    <div class="table-title">أعلى 20 صنف مبيعًا (بالقيمة)${hasItemReturns ? ' والمرتجعات' : ''}</div>
+    <div class="table-title">كل الأصناف (${fmt(byItemValue.length)} صنف) - بالقيمة${hasItemReturns ? ' والمرتجعات' : ''}</div>
+    <div class="hint">الترتيب تنازليًا حسب القيمة. استخدم فلتر "الصنف" أعلى الصفحة لو عايز تركّز على أصناف معينة.</div>
     ${itemReturnsWarn}
     <div class="grid2">
       <div class="chart-box"><canvas id="chItemsValue"></canvas></div>
       <div class="table-wrap">${tableHTML(itemValueHeaders, itemValueRows, itemValueFooter)}</div>
     </div>
-    <div class="table-title">أعلى 20 صنف مبيعًا (بالكمية)</div>
+    <div class="table-title">كل الأصناف (${fmt(byItemQty.length)} صنف) - بالكمية</div>
     <div class="table-wrap">${tableHTML(['الصنف', 'إجمالي الكمية', 'القيمة'], itemQtyRows, itemQtyFooter)}</div>
   `;
-  makeChart('chItemsValue', barConfig(byItemValue.slice(0, 10).map(x => x.key), byItemValue.slice(0, 10).map(x => x.sum), 'القيمة', true));
+  makeChart('chItemsValue', barConfig(byItemValue.slice(0, 10).map(x => x.key), byItemValue.slice(0, 10).map(x => x.sum), 'القيمة (أعلى 10)', true));
 }
 
 /* ---------------- الفروع ---------------- */
