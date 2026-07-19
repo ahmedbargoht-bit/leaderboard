@@ -69,21 +69,24 @@ html, body {
   margin: 22px 28px;
 }
 .card h2 { margin: 0 0 14px; font-size: 17px; color: var(--caramel-dark); display:flex; align-items:center; gap:8px;}
-.upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 @media (max-width: 800px) { .upload-grid { grid-template-columns: 1fr; } }
 .dropzone {
-  border: 2px dashed var(--sand-dark);
-  border-radius: 12px;
-  padding: 22px;
-  text-align: center;
+  border: 1.5px dashed var(--sand-dark);
+  border-radius: 8px;
+  padding: 5px 8px;
   cursor: pointer;
   transition: .15s;
   background: #FAF7F2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .dropzone:hover, .dropzone.drag { border-color: var(--caramel); background: #FBEFEA; }
-.dropzone .dz-icon { font-size: 30px; margin-bottom: 6px; }
-.dropzone .dz-title { font-weight: 700; color: var(--ink); }
-.dropzone .dz-sub { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; }
+.dropzone .dz-icon { font-size: 13px; line-height: 1; flex-shrink: 0; }
+.dropzone .dz-text { min-width: 0; }
+.dropzone .dz-title { font-weight: 700; color: var(--ink); font-size: 11px; line-height: 1.3; }
+.dropzone .dz-sub { font-size: 9px; color: var(--ink-soft); margin-top: 1px; line-height: 1.3; }
 .filelist { margin-top: 12px; text-align: right; font-size: 13px; }
 .filelist .fitem { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:var(--sand); border-radius:8px; margin-bottom:6px;}
 .filelist .fitem .fname { font-weight:600; }
@@ -232,8 +235,10 @@ table.datatable tr:hover td { background: #F5E4DC; }
       <div>
         <div class="dropzone" id="invDropzone">
           <div class="dz-icon">🧾</div>
-          <div class="dz-title">ملفات تقارير الفواتير</div>
-          <div class="dz-sub">اسحب وأفلت ملفات Excel هنا أو اضغط للاختيار (يمكن رفع أكثر من ملف / أكثر من سنة معًا)</div>
+          <div class="dz-text">
+            <div class="dz-title">ملفات تقارير الفواتير</div>
+            <div class="dz-sub">اسحب وأفلت أو اضغط للاختيار (أكثر من ملف/سنة)</div>
+          </div>
         </div>
         <input type="file" id="invInput" accept=".xlsx,.xls" multiple hidden>
         <div class="filelist" id="invFileList"></div>
@@ -241,8 +246,10 @@ table.datatable tr:hover td { background: #F5E4DC; }
       <div>
         <div class="dropzone" id="routeDropzone">
           <div class="dz-icon">🗺️</div>
-          <div class="dz-title">ملف خطوط سير المنسقين</div>
-          <div class="dz-sub">ملف واحد يربط كل موقع عميل بخط السير والمنطقة والقطاع الخاص به</div>
+          <div class="dz-text">
+            <div class="dz-title">ملف خطوط سير المنسقين</div>
+            <div class="dz-sub">يربط كل موقع عميل بخط السير والمنطقة والقطاع</div>
+          </div>
         </div>
         <input type="file" id="routeInput" accept=".xlsx,.xls" hidden>
         <div class="filelist" id="routeFileList"></div>
