@@ -1879,4 +1879,26 @@ function renderYoY() {
     </div>
     <div class="chart-box"><canvas id="chYoY"></canvas></div>
     <div class="table-title">إجمالي المبيعات لكل سنة (حتى نهاية ${MONTH_NAMES_AR[cap - 1]})</div>
-    <div class="table-wrap">${tableHTML(['السنة'
+    <div class="table-wrap">${tableHTML(['السنة', 'صافي المبيعات', 'متوسط الفاتورة', 'نمو عن السنة السابقة'], yearRows, yearFooter)}</div>
+    <div class="table-title">مقارنة كل نشاط بين السنوات</div>
+    <div class="table-wrap">${tableHTML(['النشاط', ...years.map(y => 'صافي ' + y), 'نمو آخر سنة'], actRows, actFooter)}</div>
+    <div class="table-title">مقارنة كل فرع بين السنوات</div>
+    <div class="table-wrap">${tableHTML(['الفرع', ...years.map(y => 'صافي ' + y), 'نمو آخر سنة'], branchRows.map(r => [r.b, ...r.cells.map(c => fmtMoney(c)), r.growthCell]), branchFooterYoY)}</div>
+  `;
+  makeChart('chYoY', barConfig(byYear.map(x => x.key), byYear.map(x => x.sum), 'صافي المبيعات', false));
+
+  document.getElementById('yoyMonthSelect').addEventListener('change', (e) => {
+    state.yoyUpToMonth = Number(e.target.value);
+    renderYoY();
+  });
+}
+
+  window.__APP_STATE__ = state; // debug/testing hook
+
+  window.renderAll = renderAll;
+  window.__appInternal = { filteredInvoices, filteredItemRows, groupSum, topN, fmt, fmtMoney, fmtPct, makeChart, barConfig, pieConfig, lineConfig };
+})();
+
+</script>
+</body>
+</html>
