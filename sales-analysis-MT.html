@@ -1048,11 +1048,11 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     }
   }
 
-  async function fetchAllRows(table) {
+  async function fetchAllRows(client, table) {
     const pageSize = 1000;
     let from = 0, all = [];
     while (true) {
-      const { data, error } = await sb.from(table).select('*').range(from, from + pageSize - 1);
+      const { data, error } = await client.from(table).select('*').range(from, from + pageSize - 1);
       if (error) throw error;
       all = all.concat(data || []);
       if (!data || data.length < pageSize) break;
@@ -1062,12 +1062,16 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   }
 
   async function loadFromCloud() {
-    if (!sb) return;
+    // بناخد نسخة محلية ثابتة من عميل السحابة عشان لو المستخدم عمل تسجيل خروج
+    // أثناء التحميل (sb بترجع null)، العملية الجارية تكمل بأمان من غير ما تنهار بخطأ.
+    const client = sb;
+    if (!client) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
       const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows] = await Promise.all([
-        fetchAllRows('tamr_sales_invoices'), fetchAllRows('tamr_sales_items'), fetchAllRows('tamr_sales_returns'), fetchAllRows('tamr_sales_manual_routes'), fetchAllRows('tamr_sales_route_catalog')
+        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog')
       ]);
+      if (sb !== client) return; // اتعمل تسجيل خروج أثناء التحميل - متجاهلين النتيجة القديمة
       state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
       state.routeCatalog = new Map(routeCatalogRows.map(r => [r.route, { branch: r.branch, type: r.type, region: r.region, sector: r.sector }]));
       state.returns = returnRows.map(dbRowToReturn);
@@ -1953,15 +1957,15 @@ function renderCustomers() {
 
   const totalReturns = returnRows.reduce((s, r) => s + (r['الإجمالي'] || 0), 0);
   const totalNetSalesAll = inv.reduce((s, i) => s + i.__net, 0);
-  const overallRetPct = totalNetSalesAll ? totalReturns / totalNetSalesAll : 0;
   const matchedReturns = totalReturns - unmatchedReturnVal;
+  const matchedRetPct = totalNetSalesAll ? matchedReturns / totalNetSalesAll : 0;
   const totalNetAfterReturns = totalNetSalesAll - matchedReturns;
   let returnsNote = '';
   if (hasReturns) {
-    returnsNote = `<div class="pill-note">↩ إجمالي المرتجعات في الفترة المحددة: ${fmtMoney(totalReturns)} (${fmtPct(overallRetPct)} من إجمالي صافي المبيعات) - متخصومة من صافي كل عميل في الجدول تحت.</div>`;
+    returnsNote = `<div class="pill-note">↩ إجمالي المرتجعات المطابقة والمخصومة من صافي العملاء: ${fmtMoney(matchedReturns)} (${fmtPct(matchedRetPct)} من إجمالي صافي المبيعات) - متخصومة من صافي كل عميل في الجدول تحت.</div>`;
     returnsNote += `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✅ إجمالي صافي المبيعات بعد خصم المرتجعات (كل العملاء): <b>${fmtMoney(totalNetAfterReturns)}</b> (كان ${fmtMoney(totalNetSalesAll)} قبل خصم المرتجعات)</div>`;
     if (unmatchedReturnCustCount > 0) {
-      returnsNote += `<div class="pill-note">⚠ ${fmtMoney(unmatchedReturnVal)} من المرتجعات (${unmatchedReturnCustCount} عميل) لأسماء عملاء مش موجودة في فواتير المبيعات المرفوعة حاليًا - راجع أسماء العملاء دي أو ارفع باقي ملفات المبيعات.</div>`;
+      returnsNote += `<div class="pill-note">⚠ ${fmtMoney(unmatchedReturnVal)} من المرتجعات (${unmatchedReturnCustCount} عميل) لأسماء عملاء مش موجودة في فواتير المبيعات المرفوعة حاليًا (غالبًا عملاء اتقفل حسابهم) - مش متخصومة من أي عميل ولا من الإجمالي فوق. راجع أسماء العملاء دي أو ارفع باقي ملفات المبيعات لو لسه عندهم فواتير.</div>`;
     }
   }
 
