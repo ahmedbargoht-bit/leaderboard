@@ -1075,8 +1075,16 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
         logStatus('لا توجد بيانات محفوظة سابقًا في السحابة - ارفع الملفات عشان تبدأ.');
         return;
       }
-      state.invoices = invRows.map(dbRowToInvoice);
-      state.itemRows = itemRows.map(dbRowToItemRow);
+      // استبعاد فواتير البضاعة المجانية/العروض الترويجية (خصم = قيمة الفاتورة بالكامل) حتى من البيانات
+      // القديمة المتزامنة سابقًا - نفس الاستبعاد اللي بيحصل وقت رفع ملفات جديدة.
+      const isFreeGoodsRow = (row) => { const g = Number(row.gross) || 0, d = Number(row.discount) || 0; return g > 0 && Math.abs(g - d) < 0.01; };
+      const excludedInvKeys = new Set();
+      const keptInvRows = invRows.filter(row => {
+        if (isFreeGoodsRow(row)) { excludedInvKeys.add((row.file_name || '') + '||' + (row.branch || '') + '||' + (row.invoice_no || '')); return false; }
+        return true;
+      });
+      state.invoices = keptInvRows.map(dbRowToInvoice);
+      state.itemRows = itemRows.filter(row => !excludedInvKeys.has((row.file_name || '') + '||' + (row.branch || '') + '||' + (row.invoice_no || ''))).map(dbRowToItemRow);
       reapplyManualRoutesToState();
       logStatus(`تم تحميل ${state.invoices.length} فاتورة و${state.returns.length} سطر مرتجع محفوظين من قبل من السحابة ✓`, 'ok');
       populateFilters();
@@ -1225,12 +1233,17 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
         const wb = XLSX.read(buf, { type: 'array', cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
-        const { invoices, errors } = SalesParser.parseSheet(rows, { fileName: q.file.name });
+        const { invoices: parsedInvoices, errors } = SalesParser.parseSheet(rows, { fileName: q.file.name });
+        // فواتير البضاعة المجانية/العروض الترويجية (ستاندات عرض، عروض 2×1...) بتتسجل بقيمة فاتورة
+        // وبعدين خصم 100% يخليها صافي صفر - دي مش خصم تجاري حقيقي، فبنستبعدها تمامًا من كل الحسابات
+        // بناءً على طلب المستخدم (بدل ما تتحسب غلط ضمن "خصم مباشر").
+        const freeGoodsCount = parsedInvoices.filter(isFreeGoodsInvoice).length;
+        const invoices = parsedInvoices.filter(inv => !isFreeGoodsInvoice(inv));
         invoices.forEach(inv => tagInvoice(inv, q.activity, q.file.name));
         newInvoices = newInvoices.concat(invoices);
         totalInv += invoices.length;
         totalErr += errors.length;
-        logStatus(`${q.file.name}: ${invoices.length} فاتورة${errors.length ? ' (' + errors.length + ' سطر لم يُفهم)' : ''}`, errors.length ? 'err' : 'ok');
+        logStatus(`${q.file.name}: ${invoices.length} فاتورة${freeGoodsCount ? ' (' + freeGoodsCount + ' فاتورة بضاعة مجانية/عروض تم استبعادها)' : ''}${errors.length ? ' (' + errors.length + ' سطر لم يُفهم)' : ''}`, errors.length ? 'err' : 'ok');
       } catch (e) {
         logStatus('خطأ في قراءة ' + q.file.name + ': ' + e.message, 'err');
       }
@@ -1279,6 +1292,15 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     const d = r['التاريخ'] instanceof Date ? r['التاريخ'] : null;
     r.__year = d ? d.getFullYear() : null;
     r.__month = d ? (d.getMonth() + 1) : null;
+  }
+
+  // فاتورة "بضاعة مجانية": قيمة الفاتورة كاملة اتخصمت (خصم = قيمة الفاتورة) فالصافي بقى صفر -
+  // مش خصم على سعر بيع حقيقي، دي بضاعة/عروض مجانية (ستاندات عرض، عروض ترويجية) بتتسجل بالنظام كده.
+  function isFreeGoodsInvoice(inv) {
+    const g = (inv && inv.footer) || {};
+    const gross = g['قيمة_الفاتورة'] || 0;
+    const disc = g['إجمالي_الخصومات'] || 0;
+    return gross > 0 && Math.abs(gross - disc) < 0.01;
   }
 
   function tagInvoice(inv, activity, fileName) {
