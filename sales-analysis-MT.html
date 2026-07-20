@@ -202,6 +202,9 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     print-color-adjust: exact !important;
     color-adjust: exact !important;
   }
+  /* طباعة جدول واحد بس من تاب "الخصم غير المباشر" (سنوي أو شهري) - بيخفي الجدول التاني وقتيًا */
+  body.print-only-yearly #indirectMonthlyBlock { display: none !important; }
+  body.print-only-monthly #indirectYearlyBlock { display: none !important; }
   .no-print { display: none !important; }
   body { background: #fff; }
   .card, .chart-box { box-shadow:none; border:1px solid #ddd; margin: 10px 0 !important; padding: 10px !important; }
@@ -820,7 +823,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     routeCatalog: new Map(), // اسم خط السير -> {branch, type, region, sector} - خطوط سير منشأة يدويًا مستقلة عن أي عميل معين
     charts: {},
     filters: { activity: [], branch: [], year: [], month: [], rep: [], item: [] }, // [] = الكل (كل القيم)
-    yoyUpToMonth: null  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
+    yoyUpToMonth: null,  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
+    indirectNetScope: 'partial'  // 'partial' = الصافي بس في الفترات اللي فيها خصم غير مباشر مسجل، 'full' = الصافي الكامل لكل الفترات
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -1713,6 +1717,18 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   window.printCurrentTab = function () {
     renderPrintFilterSummary();
     window.print();
+  };
+
+  // طباعة جدول واحد بس من تاب "الخصم غير المباشر" (سنوي أو شهري) من غير الجدول التاني -
+  // بنضيف كلاس مؤقت على body بيخفي الجدول التاني وقت الطباعة بس، وبنشيله بعدها.
+  window.printIndirectBlock = function (which) {
+    renderPrintFilterSummary();
+    const cls = 'print-only-' + which;
+    document.body.classList.add(cls);
+    const cleanup = () => document.body.classList.remove(cls);
+    window.addEventListener('afterprint', cleanup, { once: true });
+    window.print();
+    setTimeout(cleanup, 30000); // احتياطي بس (30 ثانية) لو المتصفح مادعمش afterprint - مايشيلش الكلاس قبل ما نافذة الطباعة تتقفل
   };
 
   /* ---------------- Chart helper ---------------- */
@@ -2696,6 +2712,22 @@ function renderIndirectDiscounts() {
     ym.set(d.__year, (ym.get(d.__year) || 0) + d['المبلغ']);
   });
 
+  // نطاق الصافي: 'partial' = بس السنوات/الشهور اللي فيها خصم غير مباشر مسجل فعلًا،
+  // 'full' = كل سنوات/شهور نشاط العميل حتى لو مفيش خصم غير مباشر فيها (بيبقى صفر).
+  const scope = state.indirectNetScope === 'full' ? 'full' : 'partial';
+  const scopeToggleHtml = `
+    <div class="filterbar no-print" style="margin:0 0 12px; gap:16px;">
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
+        <input type="radio" name="indirectNetScope" value="partial" ${scope === 'partial' ? 'checked' : ''}>
+        الصافي بس في الفترات اللي فيها خصم غير مباشر
+      </label>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
+        <input type="radio" name="indirectNetScope" value="full" ${scope === 'full' ? 'checked' : ''}>
+        الصافي الكامل لكل الفترات (حتى لو مفيش خصم في بعضها)
+      </label>
+    </div>
+  `;
+
   // إجمالي الخصم غير المباشر لكل عميل - سنويًا (زي ما طلب المستخدم: مبلغ الخصم + الصافي قبله + نسبته + الصافي بعده)
   const yearlyRows = [];
   let yTotalBefore = 0, yTotalDisc = 0, yTotalAfter = 0;
@@ -2704,7 +2736,9 @@ function renderIndirectDiscounts() {
     const normKey = SalesParser.normalizeCustomerKey(cust);
     const salesYm = salesYearMap.get(cust) || new Map();
     const retYm = retYearMap.get(normKey) || new Map();
-    const years = Array.from(discYearMap.get(cust).keys()).filter(Boolean).sort((a, b) => a - b);
+    const years = scope === 'full'
+      ? Array.from(new Set([...salesYm.keys(), ...discYearMap.get(cust).keys()])).filter(Boolean).sort((a, b) => a - b)
+      : Array.from(discYearMap.get(cust).keys()).filter(Boolean).sort((a, b) => a - b);
     years.forEach(y => {
       const discountAmt = discYearMap.get(cust).get(y) || 0;
       const netBefore = (salesYm.get(y) || 0) - (retYm.get(y) || 0);
@@ -2713,7 +2747,7 @@ function renderIndirectDiscounts() {
       yTotalBefore += netBefore; yTotalDisc += discountAmt; yTotalAfter += netAfter;
       yearlyRows.push([
         cust, y, fmtMoney(netBefore),
-        `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(discountAmt)}</span>`,
+        discountAmt ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(discountAmt)}</span>` : fmtMoney(0),
         fmtPct(pct), `<b>${fmtMoney(netAfter)}</b>`
       ]);
     });
@@ -2722,8 +2756,13 @@ function renderIndirectDiscounts() {
     `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(yTotalDisc)}</span>`,
     fmtPct(yTotalBefore ? yTotalDisc / yTotalBefore : 0), `<b>${fmtMoney(yTotalAfter)}</b>`];
   const yearlyTableHtml = `
-    <div class="table-title">إجمالي الخصم غير المباشر لكل عميل - سنويًا</div>
-    <div class="table-wrap">${tableHTML(['العميل', 'السنة', 'الصافي قبل الخصم غير المباشر', 'الخصم غير المباشر', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], yearlyRows, yearlyFooter)}</div>
+    <div id="indirectYearlyBlock">
+      <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <span>إجمالي الخصم غير المباشر لكل عميل - سنويًا</span>
+        <button type="button" class="btn secondary no-print" style="padding:6px 14px; font-size:12.5px;" onclick="printIndirectBlock('yearly')">🖨️ طباعة PDF - الجدول ده بس</button>
+      </div>
+      <div class="table-wrap">${tableHTML(['العميل', 'السنة', 'الصافي قبل الخصم غير المباشر', 'الخصم غير المباشر', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], yearlyRows, yearlyFooter)}</div>
+    </div>
   `;
 
   const rows = [];
@@ -2733,7 +2772,9 @@ function renderIndirectDiscounts() {
     const normKey = SalesParser.normalizeCustomerKey(cust);
     const salesYm = salesMonthMap.get(cust) || new Map();
     const retYm = retMonthMap.get(normKey) || new Map();
-    const months = Array.from(discMonthMap.get(cust).keys()).filter(Boolean).sort();
+    const months = scope === 'full'
+      ? Array.from(new Set([...salesYm.keys(), ...discMonthMap.get(cust).keys()])).filter(Boolean).sort()
+      : Array.from(discMonthMap.get(cust).keys()).filter(Boolean).sort();
     months.forEach(mk => {
       const discountAmt = discMonthMap.get(cust).get(mk) || 0;
       const netBefore = (salesYm.get(mk) || 0) - (retYm.get(mk) || 0);
@@ -2742,13 +2783,14 @@ function renderIndirectDiscounts() {
       totalBefore += netBefore; totalDisc += discountAmt; totalAfter += netAfter;
       rows.push([
         cust, monthKeyLabel(mk), fmtMoney(netBefore),
-        `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(discountAmt)}</span>`,
+        discountAmt ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(discountAmt)}</span>` : fmtMoney(0),
         fmtPct(pct), `<b>${fmtMoney(netAfter)}</b>`
       ]);
     });
   });
 
-  const footer = ['الإجمالي (شهور فيها خصم غير مباشر بس)', '', fmtMoney(totalBefore),
+  const scopeLabel = scope === 'full' ? 'كل شهور نشاط العميل' : 'الشهور اللي فيها خصم غير مباشر مسجل بس';
+  const footer = ['الإجمالي (' + scopeLabel + ')', '', fmtMoney(totalBefore),
     `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalDisc)}</span>`,
     fmtPct(totalBefore ? totalDisc / totalBefore : 0), `<b>${fmtMoney(totalAfter)}</b>`];
 
@@ -2756,15 +2798,30 @@ function renderIndirectDiscounts() {
   if (unmatchedCount) {
     note += `<div class="pill-note">⚠ ${fmtMoney(unmatchedTotal)} من الخصم غير المباشر (${fmt(unmatchedCount)} قيد) لعملاء مش متطابقين مع فواتير المبيعات - غير محتسبة هنا. اربطهم من تاب "ربط عملاء الخصم".</div>`;
   }
-  note += `<div class="hint" style="margin:6px 0 0;">ملحوظة: عمود "الصافي قبل/بعد الخصم غير المباشر" في الجدولين تحت خاص بكل عميل في السنة/الشهر اللي فيه قيد خصم غير مباشر بس - مش الصافي الكلي للعميل في كل السنة كاملة. علشان كده صف الإجمالي أسفل كل جدول أقل بكتير من إجمالي صافي المبيعات الكلي (اللي ظاهر في تاب "الفروع"/"العملاء") لأنه بيغطي بس الفترات اللي فيها خصم غير مباشر مسجل.</div>`;
+  note += scope === 'full'
+    ? `<div class="hint" style="margin:6px 0 0;">الوضع الحالي: "الصافي الكامل" - الجدولين تحت بيوروا كل سنوات/شهور نشاط كل عميل (حتى اللي مفيهاش خصم غير مباشر، بيظهر خصمها صفر).</div>`
+    : `<div class="hint" style="margin:6px 0 0;">الوضع الحالي: "الفترات اللي فيها خصم بس" - الجدولين تحت بيوروا بس السنوات/الشهور اللي فيها قيد خصم غير مباشر فعلي، فمجموعهم أقل من صافي مبيعات العميل الكامل. غيّر لـ"الصافي الكامل" فوق لو عايز تشوف كل الفترات.</div>`;
 
   el.innerHTML = `
     ${periodCardsHtml}
+    ${scopeToggleHtml}
     ${note}
     ${yearlyTableHtml}
-    <div class="table-title">الصافي قبل وبعد الخصم غير المباشر - لكل عميل/شهر (الشهور اللي فيها خصم غير مباشر مسجل بس)</div>
-    <div class="table-wrap">${tableHTML(['العميل', 'الشهر', 'الصافي قبل الخصم غير المباشر', 'الخصم غير المباشر', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], rows, footer)}</div>
+    <div id="indirectMonthlyBlock">
+      <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <span>الصافي قبل وبعد الخصم غير المباشر - لكل عميل/شهر (${scopeLabel})</span>
+        <button type="button" class="btn secondary no-print" style="padding:6px 14px; font-size:12.5px;" onclick="printIndirectBlock('monthly')">🖨️ طباعة PDF - الجدول ده بس</button>
+      </div>
+      <div class="table-wrap">${tableHTML(['العميل', 'الشهر', 'الصافي قبل الخصم غير المباشر', 'الخصم غير المباشر', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], rows, footer)}</div>
+    </div>
   `;
+
+  el.querySelectorAll('input[name="indirectNetScope"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      state.indirectNetScope = e.target.value;
+      renderIndirectDiscounts();
+    });
+  });
 }
 
 
