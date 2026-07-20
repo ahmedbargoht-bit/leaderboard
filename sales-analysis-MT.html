@@ -296,6 +296,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       <button class="tabbtn" data-tab="panel-reps" data-label="المناديب وخطوط السير">المناديب وخطوط السير</button>
       <button class="tabbtn" data-tab="panel-quarterly" data-label="الأرباع">الأرباع</button>
       <button class="tabbtn" data-tab="panel-yoy" data-label="مقارنة سنوية">مقارنة سنوية</button>
+      <button class="tabbtn" data-tab="panel-linkroutes" data-label="ربط خطوط السير">ربط خطوط السير</button>
     </div>
 
     <div class="print-only" id="printFilterSummary"></div>
@@ -308,6 +309,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       <div class="tabpanel" id="panel-reps"></div>
       <div class="tabpanel" id="panel-quarterly"></div>
       <div class="tabpanel" id="panel-yoy"></div>
+      <div class="tabpanel" id="panel-linkroutes"></div>
     </div>
   </div>
 
@@ -705,6 +707,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     itemRows: [],       // one row per item line, with full invoice context
     returns: [],        // flattened parsed return lines (شيت المرتجع)
     routeIndex: null,
+    manualRoutes: new Map(), // فرع_العميل -> {route, region, sector} - ربط يدوي محفوظ في السحابة لعملاء مفيش ليهم تطابق في ملف خطوط السير
     charts: {},
     filters: { activity: [], branch: [], year: [], month: [], rep: [], item: [] }, // [] = الكل (كل القيم)
     yoyUpToMonth: null  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
@@ -908,6 +911,46 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     };
   }
 
+  function resolveManualRoute(site) {
+    if (!site) return null;
+    const m = state.manualRoutes.get(site);
+    return m ? { خط_سير: m.route, المنطقة: m.region, القطاع: m.sector } : null;
+  }
+  // تطبيق الربط اليدوي على أي فاتورة/سطر صنف لسه معندهوش خط سير (مثلاً بيانات محملة من السحابة قبل ما يتربط الموقع ده يدويًا)
+  function reapplyManualRoutesToState() {
+    if (!state.manualRoutes.size) return;
+    state.invoices.forEach(inv => {
+      if (!inv.__route) {
+        const r = resolveManualRoute(inv['فرع_العميل']);
+        if (r) inv.__route = r;
+      }
+    });
+    state.itemRows.forEach(r => {
+      if (!r.route) {
+        const m = state.manualRoutes.get(r.site);
+        if (m) { r.route = m.route; r.region = m.region; r.sector = m.sector; }
+      }
+    });
+  }
+  async function assignManualRoute(site, route, region, sector) {
+    if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان يتحفظ الربط ده.', 'err'); return false; }
+    try {
+      const { error } = await sb.from('tamr_sales_manual_routes').upsert(
+        [{ customer_site: site, route, region: region || null, sector: sector || null, updated_at: new Date().toISOString() }],
+        { onConflict: 'customer_site' }
+      );
+      if (error) throw error;
+      state.manualRoutes.set(site, { route, region: region || null, sector: sector || null });
+      reapplyManualRoutesToState();
+      logStatus(`تم ربط "${site}" بخط السير "${route}" ✓`, 'ok');
+      renderAll();
+      return true;
+    } catch (e) {
+      logStatus('تعذر حفظ ربط خط السير: ' + (e.message || e), 'err');
+      return false;
+    }
+  }
+
   async function syncToCloud(newInvoices, newItemRows, newReturns) {
     if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length))) return;
     try {
@@ -954,9 +997,10 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     if (!sb) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
-      const [invRows, itemRows, returnRows] = await Promise.all([
-        fetchAllRows('tamr_sales_invoices'), fetchAllRows('tamr_sales_items'), fetchAllRows('tamr_sales_returns')
+      const [invRows, itemRows, returnRows, manualRouteRows] = await Promise.all([
+        fetchAllRows('tamr_sales_invoices'), fetchAllRows('tamr_sales_items'), fetchAllRows('tamr_sales_returns'), fetchAllRows('tamr_sales_manual_routes')
       ]);
+      state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
       state.returns = returnRows.map(dbRowToReturn);
       if (!invRows.length) {
         logStatus('لا توجد بيانات محفوظة سابقًا في السحابة - ارفع الملفات عشان تبدأ.');
@@ -964,6 +1008,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       }
       state.invoices = invRows.map(dbRowToInvoice);
       state.itemRows = itemRows.map(dbRowToItemRow);
+      reapplyManualRoutesToState();
       logStatus(`تم تحميل ${state.invoices.length} فاتورة و${state.returns.length} سطر مرتجع محفوظين من قبل من السحابة ✓`, 'ok');
       populateFilters();
       document.getElementById('dashboardSection').style.display = 'block';
@@ -1177,7 +1222,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     inv.__quarter = d ? Math.ceil((d.getMonth() + 1) / 3) : null;
     inv.__monthKey = d ? (d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')) : null;
     const route = state.routeIndex ? SalesParser.matchRoute(inv, state.routeIndex) : null;
-    inv.__route = route;
+    inv.__route = route || resolveManualRoute(inv['فرع_العميل']);
     const g = inv.footer || {};
     inv.__gross = g['قيمة_الفاتورة'] || 0;
     inv.__net = g['صافي_الفاتورة'] || 0;
@@ -1410,6 +1455,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     renderReps();
     renderQuarterly();
     renderYoY();
+    renderLinkRoutes();
     renderPrintFilterSummary();
   }
 
@@ -2014,6 +2060,103 @@ function renderYoY() {
   document.getElementById('yoyMonthSelect').addEventListener('change', (e) => {
     state.yoyUpToMonth = Number(e.target.value);
     renderYoY();
+  });
+}
+
+/* ---------------- ربط خطوط السير (لعملاء بدون تطابق) ---------------- */
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function renderLinkRoutes() {
+  const el = document.getElementById('panel-linkroutes');
+  const inv = state.invoices; // بدون فلاتر - عشان نشوف كل العملاء الناقصين بغض النظر عن الفلتر الحالي
+  if (!inv.length) { el.innerHTML = emptyState('ارفع ملفات الفواتير أولًا'); return; }
+
+  const unmatched = inv.filter(i => !i.__route);
+  const bySite = groupSum(unmatched, i => i['فرع_العميل'], i => i.__net);
+  bySite.sort((a, b) => b.sum - a.sum);
+
+  if (!bySite.length) {
+    el.innerHTML = `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ كل العملاء مربوطين بخط سير - مفيش حد ناقص.</div>`;
+    return;
+  }
+
+  // كل خطوط السير المعروفة حاليًا (من ملف خطوط السير المرفوع + من الروابط اليدوية المحفوظة قبل كده)
+  const knownRoutes = new Map();
+  inv.forEach(i => { if (i.__route && i.__route.خط_سير) knownRoutes.set(i.__route.خط_سير, { region: i.__route.المنطقة || '', sector: i.__route.القطاع || '' }); });
+  state.manualRoutes.forEach(m => { if (m.route) knownRoutes.set(m.route, { region: m.region || '', sector: m.sector || '' }); });
+  const routeNames = Array.from(knownRoutes.keys()).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+
+  // نحتفظ بالقيم الفعلية في مصفوفة (بدل ما نحقنها في attributes) عشان نتجنب أي مشاكل تهريب نصوص
+  const linkRoutesRows = bySite.map(x => {
+    const sample = unmatched.find(i => i['فرع_العميل'] === x.key);
+    return { site: x.key, customer: sample ? sample['العميل'] : '', branch: sample ? sample['الفرع'] : '', count: x.count, net: x.sum };
+  });
+
+  const totalNet = bySite.reduce((s, x) => s + x.sum, 0);
+  const optionsHtml = routeNames.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
+
+  const rowsHtml = linkRoutesRows.map((r, idx) => `
+    <tr data-idx="${idx}">
+      <td>${escapeHtml(r.customer)}</td>
+      <td>${escapeHtml(r.site)}</td>
+      <td>${escapeHtml(r.branch)}</td>
+      <td>${fmt(r.count)}</td>
+      <td>${fmtMoney(r.net)}</td>
+      <td>
+        <select class="lr-route-select" style="min-width:150px; font-family:inherit; padding:6px 8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <option value="">-- اختر خط سير --</option>
+          ${optionsHtml}
+          <option value="__new__">+ إنشاء خط سير جديد</option>
+        </select>
+      </td>
+      <td class="lr-new-fields" style="display:none; white-space:nowrap;">
+        <input type="text" class="lr-new-name" placeholder="اسم خط السير" style="width:110px; font-family:inherit; padding:5px 7px; border-radius:6px; border:1.5px solid var(--sand-dark); margin-inline-end:4px;">
+        <input type="text" class="lr-new-region" placeholder="المنطقة" style="width:80px; font-family:inherit; padding:5px 7px; border-radius:6px; border:1.5px solid var(--sand-dark); margin-inline-end:4px;">
+        <input type="text" class="lr-new-sector" placeholder="القطاع" style="width:80px; font-family:inherit; padding:5px 7px; border-radius:6px; border:1.5px solid var(--sand-dark);">
+      </td>
+      <td><button type="button" class="btn lr-save-btn" style="padding:7px 14px; font-size:12.5px;">حفظ</button></td>
+    </tr>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="pill-note">⚠ ${fmt(bySite.length)} عميل/موقع (${fmt(unmatched.length)} فاتورة بقيمة ${fmtMoney(totalNet)}) بدون خط سير مطابق. اربطهم بخط سير موجود أو أنشئ خط جديد من الجدول تحت.</div>
+    <div class="table-wrap"><table class="datatable"><thead><tr>
+      <th>العميل</th><th>فرع العميل (الموقع)</th><th>فرع الشركة</th><th>عدد الفواتير</th><th>صافي المبيعات</th>
+      <th>اختيار خط السير</th><th>خط سير جديد</th><th></th>
+    </tr></thead><tbody>${rowsHtml}</tbody></table></div>
+  `;
+
+  el.querySelectorAll('.lr-route-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const tr = sel.closest('tr');
+      const newFields = tr.querySelector('.lr-new-fields');
+      newFields.style.display = sel.value === '__new__' ? 'table-cell' : 'none';
+    });
+  });
+
+  el.querySelectorAll('.lr-save-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const tr = btn.closest('tr');
+      const idx = Number(tr.dataset.idx);
+      const rowData = linkRoutesRows[idx];
+      const sel = tr.querySelector('.lr-route-select');
+      let routeName, region, sector;
+      if (sel.value === '__new__') {
+        routeName = tr.querySelector('.lr-new-name').value.trim();
+        region = tr.querySelector('.lr-new-region').value.trim();
+        sector = tr.querySelector('.lr-new-sector').value.trim();
+        if (!routeName) { alert('لازم تكتب اسم خط السير الجديد'); return; }
+      } else {
+        routeName = sel.value;
+        if (!routeName) { alert('اختر خط سير أو أنشئ واحد جديد'); return; }
+        const known = knownRoutes.get(routeName) || {};
+        region = known.region || '';
+        sector = known.sector || '';
+      }
+      btn.disabled = true; btn.textContent = 'جاري الحفظ...';
+      await assignManualRoute(rowData.site, routeName, region, sector);
+    });
   });
 }
 
