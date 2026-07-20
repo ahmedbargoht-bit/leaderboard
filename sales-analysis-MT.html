@@ -2629,27 +2629,102 @@ function monthKeyLabel(mk) {
   return (MONTH_NAMES_AR[m - 1] || m) + ' ' + y;
 }
 
+function fmtDDMMYYYY(d) {
+  if (!(d instanceof Date) || isNaN(d)) return '-';
+  const dd = String(d.getDate()).padStart(2, '0'), mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
 function renderIndirectDiscounts() {
   const el = document.getElementById('panel-indirect');
   if (!el) return;
   const discAll = filteredIndirectDiscounts();
   if (!discAll.length) { el.innerHTML = emptyState('ارفع ملفات كشف حساب الخصم غير المباشر أولًا'); return; }
 
+  // كروت الفترة الزمنية المغطاة: إجمالي، وتفصيل لكل ملف مرفوع (كل ملف بيمثل فرع/قطاع عادة)
+  const datedRows = discAll.filter(d => d['التاريخ'] instanceof Date);
+  const overallMin = datedRows.length ? new Date(Math.min(...datedRows.map(d => d['التاريخ'].getTime()))) : null;
+  const overallMax = datedRows.length ? new Date(Math.max(...datedRows.map(d => d['التاريخ'].getTime()))) : null;
+
+  const byFile = new Map(); // fileName -> {min, max, count, total}
+  discAll.forEach(d => {
+    const fn = d.__fileName || 'غير معروف';
+    if (!byFile.has(fn)) byFile.set(fn, { min: null, max: null, count: 0, total: 0 });
+    const s = byFile.get(fn);
+    s.count++; s.total += d['المبلغ'];
+    if (d['التاريخ'] instanceof Date) {
+      if (!s.min || d['التاريخ'] < s.min) s.min = d['التاريخ'];
+      if (!s.max || d['التاريخ'] > s.max) s.max = d['التاريخ'];
+    }
+  });
+  const fileNames = Array.from(byFile.keys()).sort((a, b) => a.localeCompare(b, 'ar'));
+  const fileRows = fileNames.map(fn => {
+    const s = byFile.get(fn);
+    return [fn, fmtDDMMYYYY(s.min), fmtDDMMYYYY(s.max), fmt(s.count), fmtMoney(s.total)];
+  });
+
+  const periodCardsHtml = `
+    <div class="kpi-grid" style="margin-bottom:14px;">
+      <div class="kpi"><div class="kv">${fmtDDMMYYYY(overallMin)}</div><div class="kl">من تاريخ</div></div>
+      <div class="kpi"><div class="kv">${fmtDDMMYYYY(overallMax)}</div><div class="kl">إلى تاريخ</div></div>
+      <div class="kpi"><div class="kv">${fmt(byFile.size)}</div><div class="kl">عدد الملفات المرفوعة</div></div>
+      <div class="kpi"><div class="kv">${fmt(discAll.length)}</div><div class="kl">إجمالي عدد القيود</div></div>
+    </div>
+    <div class="table-title">الفترة المغطاة لكل ملف</div>
+    <div class="table-wrap">${tableHTML(['اسم الملف', 'من تاريخ', 'إلى تاريخ', 'عدد القيود', 'إجمالي الخصم'], fileRows)}</div>
+  `;
+
   const inv = filteredInvoices();
   const returnRows = filteredReturns();
   const salesMonthMap = yearBreakdownMap(inv, i => i['العميل'], i => i.__monthKey, i => i.__net);
   const retMonthMap = yearBreakdownMap(returnRows, r => r.__عميل_مطابق, r => r.__monthKey, r => r['الإجمالي']);
+  const salesYearMap = yearBreakdownMap(inv, i => i['العميل'], i => i.__year, i => i.__net);
+  const retYearMap = yearBreakdownMap(returnRows, r => r.__عميل_مطابق, r => r.__year, r => r['الإجمالي']);
 
   // نطابق كل قيد خصم بعميل الفواتير (تلقائي أو يدوي) - واللي مش متطابق بنجمعه في تحذير منفصل
   let unmatchedTotal = 0, unmatchedCount = 0;
   const discMonthMap = new Map(); // customer -> monthKey -> sum
+  const discYearMap = new Map(); // customer -> year -> sum
   discAll.forEach(d => {
     const matched = resolveIndirectCustomer(d['العميل']);
     if (!matched) { unmatchedTotal += d['المبلغ']; unmatchedCount++; return; }
     if (!discMonthMap.has(matched)) discMonthMap.set(matched, new Map());
     const mm = discMonthMap.get(matched);
     mm.set(d.__monthKey, (mm.get(d.__monthKey) || 0) + d['المبلغ']);
+    if (!discYearMap.has(matched)) discYearMap.set(matched, new Map());
+    const ym = discYearMap.get(matched);
+    ym.set(d.__year, (ym.get(d.__year) || 0) + d['المبلغ']);
   });
+
+  // إجمالي الخصم غير المباشر لكل عميل - سنويًا (زي ما طلب المستخدم: مبلغ الخصم + الصافي قبله + نسبته + الصافي بعده)
+  const yearlyRows = [];
+  let yTotalBefore = 0, yTotalDisc = 0, yTotalAfter = 0;
+  const yearlyCustomers = Array.from(discYearMap.keys()).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  yearlyCustomers.forEach(cust => {
+    const normKey = SalesParser.normalizeCustomerKey(cust);
+    const salesYm = salesYearMap.get(cust) || new Map();
+    const retYm = retYearMap.get(normKey) || new Map();
+    const years = Array.from(discYearMap.get(cust).keys()).filter(Boolean).sort((a, b) => a - b);
+    years.forEach(y => {
+      const discountAmt = discYearMap.get(cust).get(y) || 0;
+      const netBefore = (salesYm.get(y) || 0) - (retYm.get(y) || 0);
+      const pct = netBefore ? (discountAmt / netBefore) : 0;
+      const netAfter = netBefore - discountAmt;
+      yTotalBefore += netBefore; yTotalDisc += discountAmt; yTotalAfter += netAfter;
+      yearlyRows.push([
+        cust, y, fmtMoney(netBefore),
+        `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(discountAmt)}</span>`,
+        fmtPct(pct), `<b>${fmtMoney(netAfter)}</b>`
+      ]);
+    });
+  });
+  const yearlyFooter = ['الإجمالي', '', fmtMoney(yTotalBefore),
+    `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(yTotalDisc)}</span>`,
+    fmtPct(yTotalBefore ? yTotalDisc / yTotalBefore : 0), `<b>${fmtMoney(yTotalAfter)}</b>`];
+  const yearlyTableHtml = `
+    <div class="table-title">إجمالي الخصم غير المباشر لكل عميل - سنويًا</div>
+    <div class="table-wrap">${tableHTML(['العميل', 'السنة', 'الصافي قبل الخصم غير المباشر', 'الخصم غير المباشر', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], yearlyRows, yearlyFooter)}</div>
+  `;
 
   const rows = [];
   let totalBefore = 0, totalDisc = 0, totalAfter = 0;
@@ -2673,18 +2748,21 @@ function renderIndirectDiscounts() {
     });
   });
 
-  const footer = ['الإجمالي', '', fmtMoney(totalBefore),
+  const footer = ['الإجمالي (شهور فيها خصم غير مباشر بس)', '', fmtMoney(totalBefore),
     `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalDisc)}</span>`,
     fmtPct(totalBefore ? totalDisc / totalBefore : 0), `<b>${fmtMoney(totalAfter)}</b>`];
 
-  let note = `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ إجمالي الخصم غير المباشر (عملاء متطابقين): <b>${fmtMoney(totalDisc)}</b> - الصافي بعده: <b>${fmtMoney(totalAfter)}</b> (كان ${fmtMoney(totalBefore)} قبله)</div>`;
+  let note = `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ إجمالي الخصم غير المباشر (عملاء متطابقين): <b>${fmtMoney(totalDisc)}</b></div>`;
   if (unmatchedCount) {
     note += `<div class="pill-note">⚠ ${fmtMoney(unmatchedTotal)} من الخصم غير المباشر (${fmt(unmatchedCount)} قيد) لعملاء مش متطابقين مع فواتير المبيعات - غير محتسبة هنا. اربطهم من تاب "ربط عملاء الخصم".</div>`;
   }
+  note += `<div class="hint" style="margin:6px 0 0;">ملحوظة: عمود "الصافي قبل/بعد الخصم غير المباشر" في الجدولين تحت خاص بكل عميل في السنة/الشهر اللي فيه قيد خصم غير مباشر بس - مش الصافي الكلي للعميل في كل السنة كاملة. علشان كده صف الإجمالي أسفل كل جدول أقل بكتير من إجمالي صافي المبيعات الكلي (اللي ظاهر في تاب "الفروع"/"العملاء") لأنه بيغطي بس الفترات اللي فيها خصم غير مباشر مسجل.</div>`;
 
   el.innerHTML = `
-    <div class="table-title">الصافي قبل وبعد الخصم غير المباشر - لكل عميل/شهر</div>
+    ${periodCardsHtml}
     ${note}
+    ${yearlyTableHtml}
+    <div class="table-title">الصافي قبل وبعد الخصم غير المباشر - لكل عميل/شهر (الشهور اللي فيها خصم غير مباشر مسجل بس)</div>
     <div class="table-wrap">${tableHTML(['العميل', 'الشهر', 'الصافي قبل الخصم غير المباشر', 'الخصم غير المباشر', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], rows, footer)}</div>
   `;
 }
