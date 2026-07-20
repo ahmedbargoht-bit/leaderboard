@@ -1862,7 +1862,7 @@ function renderCustomers() {
 
   const byCustomer = groupSum(inv, i => i['العميل'], i => i.__net);
   byCustomer.sort((a, b) => b.sum - a.sum);
-  const top = byCustomer.slice(0, 30);
+  const top = byCustomer; // كل العملاء بالكامل، مرتبين تنازليًا حسب صافي المبيعات
   const years = activeYears(inv, i => i.__year);
   const custBmap = yearBreakdownMap(inv, i => i['العميل'], i => i.__year, i => i.__net);
 
@@ -1921,7 +1921,7 @@ function renderCustomers() {
 
   const byCash = groupSum(inv, i => i['نوع_البيع'], i => i.__net);
 
-  // صف الإجمالي لأعلى 30 عميل المعروضين في الجدول
+  // صف الإجمالي لكل العملاء المعروضين في الجدول
   const topKeys = top.map(x => x.key);
   const topInvs = inv.filter(i => topKeys.includes(i['العميل']));
   const topGross = topInvs.reduce((s, i) => s + i.__gross, 0);
@@ -1930,8 +1930,8 @@ function renderCustomers() {
   const topNet = top.reduce((s, x) => s + x.sum, 0);
   const topDiscPct = topGross ? topDisc / topGross : 0;
   const custFooterBase = years.length >= 2
-    ? ['الإجمالي', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), ...yearColumnCells(sumYearTotalsBmap(custBmap, topKeys, years), '__TOTAL__', years, fmtMoney)]
-    : ['الإجمالي', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), `<b>${fmtMoney(topNet)}</b>`];
+    ? ['الإجمالي (كل العملاء)', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), ...yearColumnCells(sumYearTotalsBmap(custBmap, topKeys, years), '__TOTAL__', years, fmtMoney)]
+    : ['الإجمالي (كل العملاء)', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), `<b>${fmtMoney(topNet)}</b>`];
   let custFooter = custFooterBase;
   if (hasReturns) {
     const topNormKeys = topKeys.map(k => SalesParser.normalizeCustomerKey(k));
@@ -1970,7 +1970,7 @@ function renderCustomers() {
       <div class="chart-box"><canvas id="chTopCustomers"></canvas></div>
       <div class="chart-box"><canvas id="chCashCredit"></canvas></div>
     </div>
-    <div class="table-title">أعلى 30 عميل (مع الخصم المباشر والصافي بعد الخصم المباشر والضريبة${hasReturns ? ' والمرتجعات' : ''})</div>
+    <div class="table-title">كل العملاء (${fmt(top.length)} عميل) - مع الخصم المباشر والصافي بعد الخصم المباشر والضريبة${hasReturns ? ' والمرتجعات' : ''}</div>
     ${returnsNote}
     <div class="table-wrap">${tableHTML(custHeaders, rowsHtml, custFooter)}</div>
   `;
