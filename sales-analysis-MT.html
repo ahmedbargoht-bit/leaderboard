@@ -295,6 +295,17 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
         <input type="file" id="returnsInput" accept=".xlsx,.xls" hidden>
         <div class="filelist" id="returnsFileList"></div>
       </div>
+      <div>
+        <div class="dropzone" id="indirectDzone">
+          <div class="dz-icon">📒</div>
+          <div class="dz-text">
+            <div class="dz-title">ملفات كشف حساب الخصم غير المباشر</div>
+            <div class="dz-sub">اكسيل لكل فرع/قطاع (أكثر من ملف) - بيتخصم من صافي كل عميل بعد المرتجع</div>
+          </div>
+        </div>
+        <input type="file" id="indirectInput" accept=".xlsx,.xls" multiple hidden>
+        <div class="filelist" id="indirectFileList"></div>
+      </div>
     </div>
     <div style="margin-top:16px; display:flex; align-items:center; gap:14px;">
       <button class="btn" id="processBtn" disabled>⚙️ معالجة البيانات وعرض التحليل</button>
@@ -323,6 +334,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       <button class="tabbtn" data-tab="panel-monthly" data-label="الشهور">الشهور</button>
       <button class="tabbtn" data-tab="panel-yoy" data-label="مقارنة سنوية">مقارنة سنوية</button>
       <button class="tabbtn" data-tab="panel-linkroutes" data-label="ربط خطوط السير">ربط خطوط السير</button>
+      <button class="tabbtn" data-tab="panel-indirect" data-label="الخصم غير المباشر">الخصم غير المباشر</button>
+      <button class="tabbtn" data-tab="panel-linkindirect" data-label="ربط عملاء الخصم">ربط عملاء الخصم</button>
     </div>
 
     <div class="print-only" id="printFilterSummary"></div>
@@ -337,6 +350,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       <div class="tabpanel" id="panel-monthly"></div>
       <div class="tabpanel" id="panel-yoy"></div>
       <div class="tabpanel" id="panel-linkroutes"></div>
+      <div class="tabpanel" id="panel-indirect"></div>
+      <div class="tabpanel" id="panel-linkindirect"></div>
     </div>
   </div>
 
@@ -726,7 +741,60 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     return { returns, errors: [] };
   }
 
-  return { parseSheet, parseRouteSheet, matchRoute, parseReturnsSheet, normalizeCustomerKey, BRANCH_ALIAS, FOOTER_LABEL_MAP };
+  // ---------------------------------------------------------------------------
+  // كشف حساب العملاء (ليدجر) - لاستخلاص "الخصم غير المباشر" (خصومات دورية تتسجل
+  // كقيد مستقل في حساب العميل، مش جزء من الفاتورة نفسها). شكل الملف: قسم لكل
+  // عميل يبدأ بصف يحتوي "إسم العميل :" في عمود معين واسم العميل في العمود اللي
+  // قبله، وبعده صفوف بيانات بترتيب أعمدة ثابت:
+  // [ملاحظات, الرصيد, مبالغ مخصمة, مبالغ مضافة, محصل من المرتدات, مرتدات,
+  //  شيكات, مدفوعات نقدى, صافى الفاتورة, الفرع, رقم المستند الورقى, رقم الإذن,
+  //  التاريخ, م]
+  // تم التحقق من صحة المنطق ده بمطابقة تامة (لآخر قرش) مع صف الإجمالي الرسمي
+  // المطبوع في آخر الملف نفسه. صف "الخصم" هو أي صف بييجي فيه رقم غير صفري في
+  // عمود "مبالغ مخصمة" فقط (وكل باقي الأعمدة الرقمية = صفر).
+  function parseIndirectDiscountSheet(rows) {
+    let currentCustomer = null;
+    let sawHeader = false;
+    const discounts = [];
+    const lineCounters = {};
+
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row) continue;
+      const headerLabel = row[7];
+      if (typeof headerLabel === 'string' && headerLabel.trim() === 'إسم العميل :') {
+        currentCustomer = (row[6] || '').toString().trim();
+        sawHeader = true;
+        continue;
+      }
+      if (!currentCustomer) continue;
+      const balance = row[1];
+      if (typeof balance !== 'number') continue; // مش صف بيانات (فاصل/إجمالي فرعي/إجمالي عام)
+      const vals = [row[2], row[3], row[4], row[5], row[6], row[7], row[8]];
+      if (vals.some((v) => typeof v !== 'number')) continue;
+      const nonzero = [];
+      vals.forEach((v, i) => { if (v !== 0) nonzero.push(i); });
+      if (nonzero.length === 1 && nonzero[0] === 0) {
+        const dateVal = row[12];
+        const key = currentCustomer;
+        const lineNo = lineCounters[key] || 0;
+        lineCounters[key] = lineNo + 1;
+        discounts.push({
+          العميل: currentCustomer,
+          __عميل_مطابق: normalizeCustomerKey(currentCustomer),
+          __lineNo: lineNo,
+          التاريخ: dateVal instanceof Date ? normalizeDateOnly(dateVal) : null,
+          المبلغ: vals[0],
+          ملاحظة: (row[0] || '').toString().trim(),
+          الفرع: (row[9] || '').toString().trim()
+        });
+      }
+    }
+    if (!sawHeader) return { discounts: [], errors: [{ type: 'header_not_found' }] };
+    return { discounts, errors: [] };
+  }
+
+  return { parseSheet, parseRouteSheet, matchRoute, parseReturnsSheet, parseIndirectDiscountSheet, normalizeCustomerKey, BRANCH_ALIAS, FOOTER_LABEL_MAP };
 });
 
 </script>
@@ -745,6 +813,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     invoices: [],      // flattened parsed invoices with derived fields + route match
     itemRows: [],       // one row per item line, with full invoice context
     returns: [],        // flattened parsed return lines (شيت المرتجع)
+    indirectDiscounts: [], // قيود الخصم غير المباشر المستخلصة من ملفات كشف حساب العملاء
+    manualIndirectLinks: new Map(), // اسم عميل الخصم (كما هو في ملف كشف الحساب) -> اسم عميل الفواتير المطابق يدويًا
     routeIndex: null,
     manualRoutes: new Map(), // فرع_العميل -> {route, region, sector} - ربط يدوي محفوظ في السحابة لعملاء مفيش ليهم تطابق في ملف خطوط السير
     routeCatalog: new Map(), // اسم خط السير -> {branch, type, region, sector} - خطوط سير منشأة يدويًا مستقلة عن أي عميل معين
@@ -1019,8 +1089,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     }
   }
 
-  async function syncToCloud(newInvoices, newItemRows, newReturns) {
-    if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length))) return;
+  async function syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts) {
+    if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length) && !(newIndirectDiscounts && newIndirectDiscounts.length))) return;
     try {
       logStatus('جاري حفظ التقرير في السحابة...');
       const invRows = newInvoices.map(invoiceToDbRow);
@@ -1042,7 +1112,16 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
         }
         retMsg = ` و${retRows.length} سطر مرتجع`;
       }
-      logStatus(`تم حفظ ${invRows.length} فاتورة و${itemRowsDb.length} سطر صنف${retMsg} في السحابة بنجاح ✓ (لن تُفقد حتى لو رجعت للأداة تاني)`, 'ok');
+      let indMsg = '';
+      if (newIndirectDiscounts && newIndirectDiscounts.length) {
+        const indRows = newIndirectDiscounts.map(indirectDiscountToDbRow);
+        for (const c of chunk(indRows, 500)) {
+          const { error } = await sb.from('tamr_sales_indirect_discounts').upsert(c, { onConflict: 'file_name,customer,line_no' });
+          if (error) throw error;
+        }
+        indMsg = ` و${indRows.length} قيد خصم غير مباشر`;
+      }
+      logStatus(`تم حفظ ${invRows.length} فاتورة و${itemRowsDb.length} سطر صنف${retMsg}${indMsg} في السحابة بنجاح ✓ (لن تُفقد حتى لو رجعت للأداة تاني)`, 'ok');
     } catch (e) {
       logStatus('تعذر الحفظ في السحابة - البيانات معروضة الآن لكنها لن تُحفظ للمرة القادمة (' + (e.message || e) + ')', 'err');
     }
@@ -1068,13 +1147,15 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     if (!client) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
-      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows] = await Promise.all([
-        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog')
+      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows] = await Promise.all([
+        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links')
       ]);
       if (sb !== client) return; // اتعمل تسجيل خروج أثناء التحميل - متجاهلين النتيجة القديمة
       state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
       state.routeCatalog = new Map(routeCatalogRows.map(r => [r.route, { branch: r.branch, type: r.type, region: r.region, sector: r.sector }]));
       state.returns = returnRows.map(dbRowToReturn);
+      state.indirectDiscounts = indirectRows.map(dbRowToIndirectDiscount);
+      state.manualIndirectLinks = new Map(indirectLinkRows.map(r => [r.discount_customer, r.matched_customer]));
       if (!invRows.length) {
         logStatus('لا توجد بيانات محفوظة سابقًا في السحابة - ارفع الملفات عشان تبدأ.');
         return;
@@ -1090,7 +1171,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       state.invoices = keptInvRows.map(dbRowToInvoice);
       state.itemRows = itemRows.filter(row => !excludedInvKeys.has((row.file_name || '') + '||' + (row.branch || '') + '||' + (row.invoice_no || ''))).map(dbRowToItemRow);
       reapplyManualRoutesToState();
-      logStatus(`تم تحميل ${state.invoices.length} فاتورة و${state.returns.length} سطر مرتجع محفوظين من قبل من السحابة ✓`, 'ok');
+      rebuildInvoiceCustomerIndex();
+      logStatus(`تم تحميل ${state.invoices.length} فاتورة و${state.returns.length} سطر مرتجع و${state.indirectDiscounts.length} قيد خصم غير مباشر محفوظين من قبل من السحابة ✓`, 'ok');
       populateFilters();
       document.getElementById('dashboardSection').style.display = 'block';
       renderAll();
@@ -1106,14 +1188,18 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   const routeInput = document.getElementById('routeInput');
   const returnsDz = document.getElementById('returnsDropzone');
   const returnsInput = document.getElementById('returnsInput');
+  const indirectDz = document.getElementById('indirectDzone');
+  const indirectInput = document.getElementById('indirectInput');
   const invList = document.getElementById('invFileList');
   const routeList = document.getElementById('routeFileList');
   const returnsList = document.getElementById('returnsFileList');
+  const indirectList = document.getElementById('indirectFileList');
   const processBtn = document.getElementById('processBtn');
   const statusLog = document.getElementById('statusLog');
 
   let routeFile = null;
   let returnsFile = null;
+  let indirectFiles = [];
 
   function logStatus(msg, cls) {
     const d = document.createElement('div');
@@ -1188,6 +1274,23 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     }
   }
 
+  function renderIndirectFileList() {
+    if (!indirectList) return;
+    indirectList.innerHTML = '';
+    indirectFiles.forEach((f, idx) => {
+      const row = document.createElement('div');
+      row.className = 'fitem';
+      row.innerHTML = `<span class="fname">${f.name}</span><span class="rm" data-idx="${idx}">✕</span>`;
+      indirectList.appendChild(row);
+    });
+    indirectList.querySelectorAll('.rm').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        indirectFiles.splice(Number(e.target.dataset.idx), 1);
+        renderIndirectFileList();
+      });
+    });
+  }
+
   setupDropzone(invDz, invInput, (files) => {
     files.filter(f => /\.(xlsx|xls)$/i.test(f.name)).forEach(f => {
       state.queue.push({ id: uid(), file: f, kind: 'invoice', activity: guessActivity(f.name) });
@@ -1204,6 +1307,13 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     setupDropzone(returnsDz, returnsInput, (files) => {
       const f = files.find(f => /\.(xlsx|xls)$/i.test(f.name));
       if (f) { returnsFile = f; renderReturnsList(); }
+    });
+  }
+
+  if (indirectDz && indirectInput) {
+    setupDropzone(indirectDz, indirectInput, (files) => {
+      files.filter(f => /\.(xlsx|xls)$/i.test(f.name)).forEach(f => indirectFiles.push(f));
+      renderIndirectFileList();
     });
   }
 
@@ -1256,6 +1366,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     const newItemRows = buildItemRowsFor(newInvoices);
     state.invoices = mergeByKey(state.invoices, newInvoices, invoiceKey);
     state.itemRows = mergeByKey(state.itemRows, newItemRows, itemKey);
+    rebuildInvoiceCustomerIndex();
 
     let newReturns = [];
     if (returnsFile) {
@@ -1274,7 +1385,26 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       }
     }
 
-    logStatus(`اكتمل التحليل: ${totalInv} فاتورة جديدة من هذه الدفعة (الإجمالي المعروض الآن: ${state.invoices.length} فاتورة، ${state.returns.length} سطر مرتجع)${totalErr ? '، ' + totalErr + ' سطر لم يتم التعرف عليه' : ''}`, 'ok');
+    let newIndirectDiscounts = [];
+    if (indirectFiles.length) {
+      for (const f of indirectFiles) {
+        try {
+          const buf = await f.arrayBuffer();
+          const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+          const { discounts, errors } = SalesParser.parseIndirectDiscountSheet(rows);
+          discounts.forEach(d => tagIndirectDiscount(d, f.name));
+          newIndirectDiscounts = newIndirectDiscounts.concat(discounts);
+          logStatus(`${f.name}: ${discounts.length} قيد خصم غير مباشر${errors.length ? ' (' + errors.length + ' - تعذر التعرف على شكل الملف)' : ''}`, errors.length ? 'err' : 'ok');
+        } catch (e) {
+          logStatus('خطأ في قراءة ' + f.name + ': ' + e.message, 'err');
+        }
+      }
+      state.indirectDiscounts = mergeByKey(state.indirectDiscounts, newIndirectDiscounts, indirectDiscountKey);
+    }
+
+    logStatus(`اكتمل التحليل: ${totalInv} فاتورة جديدة من هذه الدفعة (الإجمالي المعروض الآن: ${state.invoices.length} فاتورة، ${state.returns.length} سطر مرتجع، ${state.indirectDiscounts.length} قيد خصم غير مباشر)${totalErr ? '، ' + totalErr + ' سطر لم يتم التعرف عليه' : ''}`, 'ok');
 
     state.filters = { activity: [], branch: [], year: [], month: [], rep: [], item: [] };
     state.yoyUpToMonth = null;
@@ -1287,7 +1417,10 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     }
     processBtn.disabled = false;
 
-    syncToCloud(newInvoices, newItemRows, newReturns);
+    indirectFiles = [];
+    renderIndirectFileList();
+
+    syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts);
   });
 
   function tagReturn(r, fileName) {
@@ -1296,6 +1429,71 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     const d = r['التاريخ'] instanceof Date ? r['التاريخ'] : null;
     r.__year = d ? d.getFullYear() : null;
     r.__month = d ? (d.getMonth() + 1) : null;
+    r.__monthKey = d ? (d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')) : null;
+  }
+
+  /* ---------------- الخصم غير المباشر (كشف حساب العملاء) ---------------- */
+  function tagIndirectDiscount(d, fileName) {
+    d.__fileName = fileName;
+    const dt = d['التاريخ'] instanceof Date ? d['التاريخ'] : null;
+    d.__year = dt ? dt.getFullYear() : null;
+    d.__month = dt ? (dt.getMonth() + 1) : null;
+    d.__quarter = dt ? Math.ceil((dt.getMonth() + 1) / 3) : null;
+    d.__monthKey = dt ? (dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0')) : null;
+  }
+  function indirectDiscountKey(d) { return (d.__fileName || '') + '||' + (d['العميل'] || '') + '||' + d.__lineNo; }
+  function indirectDiscountToDbRow(d) {
+    return {
+      file_name: d.__fileName, customer: d['العميل'], customer_norm: d.__عميل_مطابق, line_no: d.__lineNo,
+      invoice_date: isoDate(d['التاريخ']), branch: d['الفرع'], amount: d['المبلغ'], note: d['ملاحظة'],
+      year: d.__year, month: d.__month, quarter: d.__quarter, month_key: d.__monthKey
+    };
+  }
+  function dbRowToIndirectDiscount(row) {
+    return {
+      __fileName: row.file_name, 'العميل': row.customer, __عميل_مطابق: row.customer_norm, __lineNo: row.line_no,
+      'التاريخ': row.invoice_date ? new Date(row.invoice_date) : null, 'الفرع': row.branch,
+      'المبلغ': Number(row.amount) || 0, 'ملاحظة': row.note,
+      __year: row.year, __month: row.month, __quarter: row.quarter, __monthKey: row.month_key
+    };
+  }
+  // مطابقة اسم عميل الخصم (كما هو في كشف الحساب) باسم عميل الفواتير: أولًا بالاسم المطابق تمامًا
+  // (بعد التطبيع)، وإلا بالربط اليدوي المحفوظ في السحابة.
+  function resolveIndirectCustomer(discountCustomerName) {
+    if (!discountCustomerName) return null;
+    const norm = SalesParser.normalizeCustomerKey(discountCustomerName);
+    if (state.__invCustByNorm && state.__invCustByNorm.has(norm)) return state.__invCustByNorm.get(norm);
+    const manual = state.manualIndirectLinks.get(discountCustomerName);
+    return manual || null;
+  }
+  // يبني/يحدّث فهرس أسماء عملاء الفواتير (بالاسم المطبّع) - يُستدعى كل ما تتغير قائمة الفواتير
+  function rebuildInvoiceCustomerIndex() {
+    const map = new Map();
+    state.invoices.forEach(inv => {
+      const name = inv['العميل'];
+      if (!name) return;
+      const norm = SalesParser.normalizeCustomerKey(name);
+      if (!map.has(norm)) map.set(norm, name);
+    });
+    state.__invCustByNorm = map;
+  }
+  async function assignManualIndirectLink(discountCustomer, matchedCustomer) {
+    if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان يتحفظ الربط ده.', 'err'); return false; }
+    if (!discountCustomer || !matchedCustomer) return false;
+    try {
+      const { error } = await sb.from('tamr_sales_indirect_links').upsert(
+        [{ discount_customer: discountCustomer, matched_customer: matchedCustomer, updated_at: new Date().toISOString() }],
+        { onConflict: 'discount_customer' }
+      );
+      if (error) throw error;
+      state.manualIndirectLinks.set(discountCustomer, matchedCustomer);
+      logStatus(`تم ربط "${discountCustomer}" بعميل الفواتير "${matchedCustomer}" ✓`, 'ok');
+      renderAll();
+      return true;
+    } catch (e) {
+      logStatus('تعذر حفظ ربط عميل الخصم: ' + (e.message || e), 'err');
+      return false;
+    }
   }
 
   // فاتورة "بضاعة مجانية": قيمة الفاتورة كاملة اتخصمت (خصم = قيمة الفاتورة) فالصافي بقى صفر -
@@ -1459,6 +1657,12 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       matchFilter('item', r['الصنف'])
     );
   }
+  function filteredIndirectDiscounts() {
+    return state.indirectDiscounts.filter(d =>
+      matchFilter('year', d.__year) &&
+      matchFilter('month', d.__month)
+    );
+  }
 
   /* ---------------- Aggregation helpers ---------------- */
   function groupSum(rows, keyFn, sumFn) {
@@ -1557,6 +1761,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     renderMonthly();
     renderYoY();
     renderLinkRoutes();
+    renderIndirectDiscounts();
+    renderLinkIndirect();
     renderPrintFilterSummary();
   }
 
@@ -2351,6 +2557,136 @@ function renderLinkRoutes() {
       await assignManualRoute(rowData.site, routeName, region, sector);
     });
   });
+}
+
+/* ---------------- ربط عملاء الخصم غير المباشر ---------------- */
+function renderLinkIndirect() {
+  const el = document.getElementById('panel-linkindirect');
+  if (!el) return;
+  const discounts = state.indirectDiscounts;
+  if (!discounts.length) { el.innerHTML = emptyState('ارفع ملفات كشف حساب الخصم غير المباشر أولًا'); return; }
+
+  // كل أسماء عملاء الفواتير الحالية (بغض النظر عن الفلاتر) - قائمة الاختيار
+  const invCustomerNames = Array.from(new Set(state.invoices.map(i => i['العميل']).filter(Boolean)))
+    .sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const optionsHtmlFor = (selected) => invCustomerNames.map(c =>
+    `<option value="${escapeHtml(c)}" ${c === selected ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+
+  const byDiscCust = groupSum(discounts, d => d['العميل'], d => d['المبلغ']);
+  byDiscCust.sort((a, b) => b.sum - a.sum);
+
+  const rows = byDiscCust.map(x => ({ discCustomer: x.key, sum: x.sum, count: x.count, matched: resolveIndirectCustomer(x.key) }));
+  const unmatchedRows = rows.filter(r => !r.matched);
+  const matchedCount = rows.length - unmatchedRows.length;
+
+  const statusNote = unmatchedRows.length
+    ? `<div class="pill-note">⚠ ${fmt(unmatchedRows.length)} من عملاء ملفات الخصم غير المباشر (من إجمالي ${fmt(rows.length)}) مش متطابقين مع أي عميل في الفواتير - اربطهم يدويًا من الجدول تحت عشان يظهروا في تاب "الخصم غير المباشر".</div>`
+    : `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ كل عملاء ملفات الخصم غير المباشر متطابقين مع عملاء الفواتير.</div>`;
+
+  const rowsHtml = rows.map((r, idx) => `
+    <tr data-idx="${idx}">
+      <td>${escapeHtml(r.discCustomer)}</td>
+      <td>${fmt(r.count)}</td>
+      <td>${fmtMoney(r.sum)}</td>
+      <td>${r.matched ? `<span style="color:var(--good); font-weight:700;">✓ ${escapeHtml(r.matched)}</span>` : '<span style="color:var(--bad); font-weight:700;">غير متطابق</span>'}</td>
+      <td>
+        <select class="li-select" style="min-width:220px; font-family:inherit; padding:6px 8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <option value="">-- اختر عميل الفواتير --</option>
+          ${optionsHtmlFor(r.matched)}
+        </select>
+      </td>
+      <td><button type="button" class="btn li-save-btn" style="padding:7px 14px; font-size:12.5px;">ربط</button></td>
+    </tr>
+  `).join('');
+
+  el.innerHTML = `
+    ${statusNote}
+    <div class="table-title">كل عملاء ملفات الخصم غير المباشر (${fmt(rows.length)}) - ${fmt(matchedCount)} متطابق</div>
+    <div class="table-wrap"><table class="datatable"><thead><tr>
+      <th>اسم العميل (في ملف كشف الحساب)</th><th>عدد القيود</th><th>إجمالي الخصم</th><th>الحالة</th><th>اربط بعميل الفواتير</th><th></th>
+    </tr></thead><tbody>${rowsHtml}</tbody></table></div>
+  `;
+
+  el.querySelectorAll('.li-save-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const tr = btn.closest('tr');
+      const idx = Number(tr.dataset.idx);
+      const rowData = rows[idx];
+      const sel = tr.querySelector('.li-select');
+      const matchedCustomer = sel.value;
+      if (!matchedCustomer) { alert('اختر عميل الفواتير المطابق'); return; }
+      btn.disabled = true; btn.textContent = 'جاري الحفظ...';
+      await assignManualIndirectLink(rowData.discCustomer, matchedCustomer);
+    });
+  });
+}
+
+/* ---------------- الخصم غير المباشر: الصافي قبل/بعد لكل عميل/شهر ---------------- */
+function monthKeyLabel(mk) {
+  if (!mk) return '-';
+  const parts = String(mk).split('-');
+  const y = parts[0], m = Number(parts[1]);
+  return (MONTH_NAMES_AR[m - 1] || m) + ' ' + y;
+}
+
+function renderIndirectDiscounts() {
+  const el = document.getElementById('panel-indirect');
+  if (!el) return;
+  const discAll = filteredIndirectDiscounts();
+  if (!discAll.length) { el.innerHTML = emptyState('ارفع ملفات كشف حساب الخصم غير المباشر أولًا'); return; }
+
+  const inv = filteredInvoices();
+  const returnRows = filteredReturns();
+  const salesMonthMap = yearBreakdownMap(inv, i => i['العميل'], i => i.__monthKey, i => i.__net);
+  const retMonthMap = yearBreakdownMap(returnRows, r => r.__عميل_مطابق, r => r.__monthKey, r => r['الإجمالي']);
+
+  // نطابق كل قيد خصم بعميل الفواتير (تلقائي أو يدوي) - واللي مش متطابق بنجمعه في تحذير منفصل
+  let unmatchedTotal = 0, unmatchedCount = 0;
+  const discMonthMap = new Map(); // customer -> monthKey -> sum
+  discAll.forEach(d => {
+    const matched = resolveIndirectCustomer(d['العميل']);
+    if (!matched) { unmatchedTotal += d['المبلغ']; unmatchedCount++; return; }
+    if (!discMonthMap.has(matched)) discMonthMap.set(matched, new Map());
+    const mm = discMonthMap.get(matched);
+    mm.set(d.__monthKey, (mm.get(d.__monthKey) || 0) + d['المبلغ']);
+  });
+
+  const rows = [];
+  let totalBefore = 0, totalDisc = 0, totalAfter = 0;
+  const customers = Array.from(discMonthMap.keys()).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  customers.forEach(cust => {
+    const normKey = SalesParser.normalizeCustomerKey(cust);
+    const salesYm = salesMonthMap.get(cust) || new Map();
+    const retYm = retMonthMap.get(normKey) || new Map();
+    const months = Array.from(discMonthMap.get(cust).keys()).filter(Boolean).sort();
+    months.forEach(mk => {
+      const discountAmt = discMonthMap.get(cust).get(mk) || 0;
+      const netBefore = (salesYm.get(mk) || 0) - (retYm.get(mk) || 0);
+      const pct = netBefore ? (discountAmt / netBefore) : 0;
+      const netAfter = netBefore - discountAmt;
+      totalBefore += netBefore; totalDisc += discountAmt; totalAfter += netAfter;
+      rows.push([
+        cust, monthKeyLabel(mk), fmtMoney(netBefore),
+        `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(discountAmt)}</span>`,
+        fmtPct(pct), `<b>${fmtMoney(netAfter)}</b>`
+      ]);
+    });
+  });
+
+  const footer = ['الإجمالي', '', fmtMoney(totalBefore),
+    `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalDisc)}</span>`,
+    fmtPct(totalBefore ? totalDisc / totalBefore : 0), `<b>${fmtMoney(totalAfter)}</b>`];
+
+  let note = `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ إجمالي الخصم غير المباشر (عملاء متطابقين): <b>${fmtMoney(totalDisc)}</b> - الصافي بعده: <b>${fmtMoney(totalAfter)}</b> (كان ${fmtMoney(totalBefore)} قبله)</div>`;
+  if (unmatchedCount) {
+    note += `<div class="pill-note">⚠ ${fmtMoney(unmatchedTotal)} من الخصم غير المباشر (${fmt(unmatchedCount)} قيد) لعملاء مش متطابقين مع فواتير المبيعات - غير محتسبة هنا. اربطهم من تاب "ربط عملاء الخصم".</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="table-title">الصافي قبل وبعد الخصم غير المباشر - لكل عميل/شهر</div>
+    ${note}
+    <div class="table-wrap">${tableHTML(['العميل', 'الشهر', 'الصافي قبل الخصم غير المباشر', 'الخصم غير المباشر', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], rows, footer)}</div>
+  `;
 }
 
 
