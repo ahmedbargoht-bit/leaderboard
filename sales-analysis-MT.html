@@ -392,6 +392,18 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     return v instanceof Date && !isNaN(v.getTime());
   }
 
+  // ملحوظة مهمة: بعض ملفات الإكسيل بتخزن التاريخ كرقم تسلسلي فيه كسر صغير جدًا
+  // (مثلًا 23:59:51 بدل منتصف الليل بالظبط) بسبب دقة الأرقام العشرية وقت تصدير التقرير.
+  // ده بيخلي getFullYear()/getMonth()/getDate() يرجعوا اليوم اللي قبله بالغلط -
+  // وده خطير جدًا لما يكون التاريخ أول الشهر أو أول السنة (زي 01/01)، لأنه وقتها
+  // بيحسب الفاتورة على السنة/الشهر الغلط بالكامل. الحل: نزود التاريخ بساعة كهامش أمان
+  // قبل ما نستخرج السنة/الشهر/اليوم، وده بيصحح الفرق البسيط من غير ما يأثر على أي تاريخ سليم.
+  function normalizeDateOnly(d) {
+    if (!isDate(d)) return d;
+    const nudged = new Date(d.getTime() + 3600000); // +1 ساعة هامش أمان
+    return new Date(nudged.getFullYear(), nudged.getMonth(), nudged.getDate());
+  }
+
   // Non-null, (optionally) non-label cells of a row, in column order: [[col, value], ...]
   function rowValues(row, excludeLabels) {
     const out = [];
@@ -504,7 +516,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
         meta['كود'] = metaTokens[idx++];
         meta['فرع_العميل'] = metaTokens[idx++];
         meta['العميل'] = metaTokens[idx++];
-        meta['التاريخ'] = metaTokens[idx++];
+        meta['التاريخ'] = normalizeDateOnly(metaTokens[idx++]);
         for (const k of ['المستخدم', 'نوع_الفاتورة', 'رقم_الفاتورة', 'نوع_البيع', 'الوقت',
           'المندوب', 'كود', 'فرع_العميل', 'العميل', 'التاريخ']) {
           if (meta[k] === undefined) { ok = false; break; }
@@ -664,7 +676,7 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
       returns.push({
         رقم_الفاتورة: invoiceNo,
         __lineNo: lineNo,
-        التاريخ: dateVal instanceof Date ? dateVal : null,
+        التاريخ: dateVal instanceof Date ? normalizeDateOnly(dateVal) : null,
         الفرع: trimCell('الفرع'),
         العميل: customer,
         __عميل_مطابق: normalizeCustomerKey(customer),
@@ -740,8 +752,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   function uid() { return Math.random().toString(36).slice(2, 10); }
 
   /* ---------------- Cloud sync (Supabase) ---------------- */
-  const SUPABASE_URL = 'https://tneeosrbxedexsrigapg.supabase.co';
-  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuZWVvc3JieGVkZXhzcmlnYXBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMTcxMTQsImV4cCI6MjA5NDY5MzExNH0.JHXgJ6EeDcdeofD5HShRnWvwPazCIfY7q7pCC2GMOFw';
+  const SUPABASE_URL = '__SUPABASE_URL__';
+  const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
   const LOGIN_SECRET_STORAGE_KEY = 'tamr_sales_app_secret_v1';
   let sb = null;
   const supabaseAvailable = !!(window.supabase && window.supabase.createClient && SUPABASE_URL.indexOf('__') !== 0);
@@ -1461,6 +1473,11 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
 
   initLoginFlow();
 
+  window.__APP_STATE__ = state; // debug/testing hook
+
+  window.renderAll = renderAll;
+  window.__appInternal = { filteredInvoices, filteredItemRows, groupSum, topN, fmt, fmtMoney, fmtPct, makeChart, barConfig, pieConfig, lineConfig };
+})();
 /* ============================================================
    دوال العرض لكل تاب - تُدمج داخل نفس IIFE الخاص بـ app.js
    (تستخدم state, filteredInvoices, filteredItemRows, groupSum, topN,
@@ -2159,12 +2176,6 @@ function renderLinkRoutes() {
     });
   });
 }
-
-  window.__APP_STATE__ = state; // debug/testing hook
-
-  window.renderAll = renderAll;
-  window.__appInternal = { filteredInvoices, filteredItemRows, groupSum, topN, fmt, fmtMoney, fmtPct, makeChart, barConfig, pieConfig, lineConfig };
-})();
 
 </script>
 </body>
