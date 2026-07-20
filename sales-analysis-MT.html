@@ -866,7 +866,14 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
     }
   }
 
-  function isoDate(d) { return d instanceof Date && !isNaN(d) ? d.toISOString().slice(0, 10) : null; }
+  // ملحوظة: استخدام toISOString() هنا كان بيسبب رجوع التاريخ يوم للخلف (لأنه بيحول للتوقيت العالمي UTC،
+  // ومصر +2/+3 عن UTC، فمنتصف ليل أول الشهر محليًا كان بيتحول لليوم اللي قبله في UTC). لازم نبني
+  // النص بالتاريخ المحلي مباشرة (سنة-شهر-يوم) من غير أي تحويل توقيت.
+  function isoDate(d) {
+    if (!(d instanceof Date) || isNaN(d)) return null;
+    const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
   function chunk(arr, n) { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; }
 
   // ملحوظة مهمة: رقم الفاتورة بيتصفر ويتكرر لكل فرع على حدة (مش رقم واحد لكل الشركة)،
