@@ -191,6 +191,11 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
 
 .print-only { display: none; }
 
+@page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
 @media print {
   * {
     -webkit-print-color-adjust: exact !important;
@@ -199,14 +204,34 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   }
   .no-print { display: none !important; }
   body { background: #fff; }
-  .card, .chart-box { box-shadow:none; border:1px solid #ddd; }
+  .card, .chart-box { box-shadow:none; border:1px solid #ddd; margin: 10px 0 !important; padding: 10px !important; }
   .filterbar { display:none !important; }
-  .print-only { display: block !important; margin: 4px 28px 12px; font-size: 12.5px; font-weight: 700; color: var(--ink-soft); background: var(--sand); border-radius: 8px; padding: 8px 14px; }
+  .print-only { display: block !important; margin: 4px 0 12px; font-size: 12px; font-weight: 700; color: var(--ink-soft); background: var(--sand); border-radius: 8px; padding: 8px 14px; }
   .tabpanel { display: none !important; }
   .tabpanel.active { display: block !important; page-break-before: auto; }
-  .table-wrap { max-height: none; overflow: visible; }
-  .kpi-grid { page-break-inside: avoid; }
+
+  /* أهم حاجة: منع أي جدول من إنه يتقص أو يترحّل - كل الصفوف والأعمدة لازم تظهر كاملة */
+  .table-wrap { max-height: none !important; overflow: visible !important; border-radius: 0; }
+  table.datatable { width: 100% !important; table-layout: auto; font-size: 9.5px !important; page-break-inside: auto; }
+  table.datatable th, table.datatable td {
+    padding: 4px 5px !important;
+    overflow-wrap: break-word; word-break: break-word;
+    white-space: normal !important;
+  }
+  table.datatable thead { display: table-header-group; } /* تكرار صف العناوين في كل صفحة */
+  table.datatable tfoot { display: table-footer-group; } /* تكرار صف الإجمالي في آخر كل صفحة */
+  table.datatable tr { page-break-inside: avoid; }
+  table.datatable th { position: static !important; }
+  table.datatable tfoot .total-row td { position: static !important; }
+
+  .chart-box { page-break-inside: avoid; }
+  .grid2 { display: block !important; }
+  .grid2 .chart-box { margin-bottom: 10px; }
+  canvas { max-width: 100% !important; }
+
+  .kpi-grid { page-break-inside: avoid; grid-template-columns: repeat(4, 1fr) !important; }
   .app-header { page-break-after: avoid; }
+  .table-title { page-break-after: avoid; }
 }
 
 </style>
@@ -752,8 +777,8 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   function uid() { return Math.random().toString(36).slice(2, 10); }
 
   /* ---------------- Cloud sync (Supabase) ---------------- */
-  const SUPABASE_URL = '__SUPABASE_URL__';
-  const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
+  const SUPABASE_URL = 'https://tneeosrbxedexsrigapg.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuZWVvc3JieGVkZXhzcmlnYXBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMTcxMTQsImV4cCI6MjA5NDY5MzExNH0.JHXgJ6EeDcdeofD5HShRnWvwPazCIfY7q7pCC2GMOFw';
   const LOGIN_SECRET_STORAGE_KEY = 'tamr_sales_app_secret_v1';
   let sb = null;
   const supabaseAvailable = !!(window.supabase && window.supabase.createClient && SUPABASE_URL.indexOf('__') !== 0);
