@@ -834,6 +834,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     filters: { activity: [], branch: [], year: [], month: [], rep: [], item: [] }, // [] = الكل (كل القيم)
     yoyUpToMonth: null,  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
     indirectNetScope: 'partial',  // 'partial' = الصافي بس في الفترات اللي فيها خصم غير مباشر مسجل، 'full' = الصافي الكامل لكل الفترات
+    indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set()  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
   };
 
@@ -2807,35 +2808,55 @@ function renderIndirectDiscounts() {
     ym.set(d.__year, (ym.get(d.__year) || 0) + d['المبلغ']);
   });
 
+  // نطاق العملاء: 'discounted' = بس العملاء اللي عليهم خصم غير مباشر مسجل، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
+  const customerScope = state.indirectCustomerScope === 'all' ? 'all' : 'discounted';
   // نطاق الصافي: 'partial' = بس السنوات/الشهور اللي فيها خصم غير مباشر مسجل فعلًا،
   // 'full' = كل سنوات/شهور نشاط العميل حتى لو مفيش خصم غير مباشر فيها (بيبقى صفر).
-  const scope = state.indirectNetScope === 'full' ? 'full' : 'partial';
-  const scopeToggleHtml = `
-    <div class="filterbar no-print" style="margin:0 0 12px; gap:16px;">
+  // لما نطاق العملاء = "كل العملاء"، لازم الفترات تبقى "كاملة" تلقائيًا عشان الإجمالي يتطابق تمامًا مع تاب العملاء.
+  const scope = customerScope === 'all' ? 'full' : (state.indirectNetScope === 'full' ? 'full' : 'partial');
+  const customerScopeToggleHtml = `
+    <div class="filterbar no-print" style="margin:0 0 8px; gap:16px;">
       <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
-        <input type="radio" name="indirectNetScope" value="partial" ${scope === 'partial' ? 'checked' : ''}>
-        الصافي بس في الفترات اللي فيها خصم غير مباشر
+        <input type="radio" name="indirectCustomerScope" value="discounted" ${customerScope === 'discounted' ? 'checked' : ''}>
+        العملاء اللي عليهم خصم غير مباشر بس
       </label>
       <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
-        <input type="radio" name="indirectNetScope" value="full" ${scope === 'full' ? 'checked' : ''}>
+        <input type="radio" name="indirectCustomerScope" value="all" ${customerScope === 'all' ? 'checked' : ''}>
+        كل عملاء الفواتير (حتى اللي مالهمش خصم غير مباشر خالص - بيظهروا بخصم = صفر)
+      </label>
+    </div>
+  `;
+  const scopeToggleHtml = `
+    <div class="filterbar no-print" style="margin:0 0 12px; gap:16px; ${customerScope === 'all' ? 'opacity:.5;' : ''}">
+      <label style="display:flex; align-items:center; gap:6px; ${customerScope === 'all' ? '' : 'cursor:pointer;'} font-size:13.5px;">
+        <input type="radio" name="indirectNetScope" value="partial" ${scope === 'partial' ? 'checked' : ''} ${customerScope === 'all' ? 'disabled' : ''}>
+        الصافي بس في الفترات اللي فيها خصم غير مباشر
+      </label>
+      <label style="display:flex; align-items:center; gap:6px; ${customerScope === 'all' ? '' : 'cursor:pointer;'} font-size:13.5px;">
+        <input type="radio" name="indirectNetScope" value="full" ${scope === 'full' ? 'checked' : ''} ${customerScope === 'all' ? 'disabled' : ''}>
         الصافي الكامل لكل الفترات (حتى لو مفيش خصم في بعضها)
       </label>
     </div>
+    ${customerScope === 'all' ? '<div class="hint" style="margin:-6px 0 12px;">وضع الفترات مثبّت على "الصافي الكامل" تلقائيًا لأن نطاق العملاء = "كل العملاء".</div>' : ''}
   `;
 
   // إجمالي الخصم غير المباشر لكل عميل - سنويًا (زي ما طلب المستخدم: مبلغ الخصم + الصافي قبله + نسبته + الصافي بعده)
   const yearlyRows = [];
   let yTotalBefore = 0, yTotalDisc = 0, yTotalAfter = 0;
-  const yearlyCustomers = Array.from(discYearMap.keys()).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const yearlyCustomers = (customerScope === 'all'
+    ? Array.from(new Set([...salesYearMap.keys(), ...discYearMap.keys()]))
+    : Array.from(discYearMap.keys())
+  ).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   yearlyCustomers.forEach(cust => {
     const normKey = SalesParser.normalizeCustomerKey(cust);
     const salesYm = salesYearMap.get(cust) || new Map();
     const retYm = retYearMap.get(normKey) || new Map();
+    const custDiscYm = discYearMap.get(cust) || new Map();
     const years = scope === 'full'
-      ? Array.from(new Set([...salesYm.keys(), ...discYearMap.get(cust).keys()])).filter(Boolean).sort((a, b) => a - b)
-      : Array.from(discYearMap.get(cust).keys()).filter(Boolean).sort((a, b) => a - b);
+      ? Array.from(new Set([...salesYm.keys(), ...custDiscYm.keys()])).filter(Boolean).sort((a, b) => a - b)
+      : Array.from(custDiscYm.keys()).filter(Boolean).sort((a, b) => a - b);
     years.forEach(y => {
-      const discountAmt = discYearMap.get(cust).get(y) || 0;
+      const discountAmt = custDiscYm.get(y) || 0;
       const netBefore = (salesYm.get(y) || 0) - (retYm.get(y) || 0);
       const pct = netBefore ? (discountAmt / netBefore) : 0;
       const netAfter = netBefore - discountAmt;
@@ -2862,16 +2883,20 @@ function renderIndirectDiscounts() {
 
   const rows = [];
   let totalBefore = 0, totalDisc = 0, totalAfter = 0;
-  const customers = Array.from(discMonthMap.keys()).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const customers = (customerScope === 'all'
+    ? Array.from(new Set([...salesMonthMap.keys(), ...discMonthMap.keys()]))
+    : Array.from(discMonthMap.keys())
+  ).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   customers.forEach(cust => {
     const normKey = SalesParser.normalizeCustomerKey(cust);
     const salesYm = salesMonthMap.get(cust) || new Map();
     const retYm = retMonthMap.get(normKey) || new Map();
+    const custDiscMm = discMonthMap.get(cust) || new Map();
     const months = scope === 'full'
-      ? Array.from(new Set([...salesYm.keys(), ...discMonthMap.get(cust).keys()])).filter(Boolean).sort()
-      : Array.from(discMonthMap.get(cust).keys()).filter(Boolean).sort();
+      ? Array.from(new Set([...salesYm.keys(), ...custDiscMm.keys()])).filter(Boolean).sort()
+      : Array.from(custDiscMm.keys()).filter(Boolean).sort();
     months.forEach(mk => {
-      const discountAmt = discMonthMap.get(cust).get(mk) || 0;
+      const discountAmt = custDiscMm.get(mk) || 0;
       const netBefore = (salesYm.get(mk) || 0) - (retYm.get(mk) || 0);
       const pct = netBefore ? (discountAmt / netBefore) : 0;
       const netAfter = netBefore - discountAmt;
@@ -2884,7 +2909,8 @@ function renderIndirectDiscounts() {
     });
   });
 
-  const scopeLabel = scope === 'full' ? 'كل شهور نشاط العميل' : 'الشهور اللي فيها خصم غير مباشر مسجل بس';
+  const customerScopeLabel = customerScope === 'all' ? 'كل العملاء' : 'العملاء اللي عليهم خصم غير مباشر بس';
+  const scopeLabel = customerScopeLabel + ' - ' + (scope === 'full' ? 'كل شهور نشاطهم' : 'الشهور اللي فيها خصم غير مباشر مسجل بس');
   const footer = ['الإجمالي (' + scopeLabel + ')', '', fmtMoney(totalBefore),
     `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalDisc)}</span>`,
     fmtPct(totalBefore ? totalDisc / totalBefore : 0), `<b>${fmtMoney(totalAfter)}</b>`];
@@ -2893,12 +2919,17 @@ function renderIndirectDiscounts() {
   if (unmatchedCount) {
     note += `<div class="pill-note">⚠ ${fmtMoney(unmatchedTotal)} من الخصم غير المباشر (${fmt(unmatchedCount)} قيد) لعملاء مش متطابقين مع فواتير المبيعات - غير محتسبة هنا. اربطهم من تاب "ربط عملاء الخصم".</div>`;
   }
-  note += scope === 'full'
-    ? `<div class="hint" style="margin:6px 0 0;">الوضع الحالي: "الصافي الكامل" - الجدولين تحت بيوروا كل سنوات/شهور نشاط كل عميل (حتى اللي مفيهاش خصم غير مباشر، بيظهر خصمها صفر).</div>`
-    : `<div class="hint" style="margin:6px 0 0;">الوضع الحالي: "الفترات اللي فيها خصم بس" - الجدولين تحت بيوروا بس السنوات/الشهور اللي فيها قيد خصم غير مباشر فعلي، فمجموعهم أقل من صافي مبيعات العميل الكامل. غيّر لـ"الصافي الكامل" فوق لو عايز تشوف كل الفترات.</div>`;
+  if (customerScope === 'all') {
+    note += `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✅ الجدولين تحت بيغطوا كل عملاء الفواتير (${fmt(yearlyCustomers.length)} عميل) - بما فيهم اللي مالهمش خصم غير مباشر خالص (بيظهروا بخصم = صفر). الإجمالي هنا لازم يتطابق تمامًا مع صافي المبيعات في تاب "العملاء".</div>`;
+  } else {
+    note += scope === 'full'
+      ? `<div class="hint" style="margin:6px 0 0;">الوضع الحالي: "الصافي الكامل" - الجدولين تحت بيوروا كل سنوات/شهور نشاط العملاء اللي عليهم خصم غير مباشر بس (حتى اللي مفيهاش خصم غير مباشر في بعض الفترات، بيظهر خصمها صفر). عشان الإجمالي يتطابق تمامًا مع تاب العملاء، اختار "كل عملاء الفواتير" فوق.</div>`
+      : `<div class="hint" style="margin:6px 0 0;">الوضع الحالي: "الفترات اللي فيها خصم بس" - الجدولين تحت بيوروا بس السنوات/الشهور اللي فيها قيد خصم غير مباشر فعلي، فمجموعهم أقل من صافي مبيعات العميل الكامل. غيّر لـ"الصافي الكامل" فوق لو عايز تشوف كل الفترات.</div>`;
+  }
 
   el.innerHTML = `
     ${periodCardsHtml}
+    ${customerScopeToggleHtml}
     ${scopeToggleHtml}
     ${note}
     ${yearlyTableHtml}
@@ -2914,6 +2945,12 @@ function renderIndirectDiscounts() {
   el.querySelectorAll('input[name="indirectNetScope"]').forEach(radio => {
     radio.addEventListener('change', (e) => {
       state.indirectNetScope = e.target.value;
+      renderIndirectDiscounts();
+    });
+  });
+  el.querySelectorAll('input[name="indirectCustomerScope"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      state.indirectCustomerScope = e.target.value;
       renderIndirectDiscounts();
     });
   });
