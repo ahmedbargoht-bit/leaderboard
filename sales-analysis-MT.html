@@ -833,7 +833,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     charts: {},
     filters: { activity: [], branch: [], year: [], month: [], rep: [], item: [] }, // [] = الكل (كل القيم)
     yoyUpToMonth: null,  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
-    indirectNetScope: 'partial'  // 'partial' = الصافي بس في الفترات اللي فيها خصم غير مباشر مسجل، 'full' = الصافي الكامل لكل الفترات
+    indirectNetScope: 'partial',  // 'partial' = الصافي بس في الفترات اللي فيها خصم غير مباشر مسجل، 'full' = الصافي الكامل لكل الفترات
+    custHiddenCols: new Set()  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -2116,11 +2117,23 @@ function renderCustomers() {
   retByCustNorm.forEach((val, k) => { if (!invCustomerNormKeys.has(k)) { unmatchedReturnVal += val; unmatchedReturnCustCount++; } });
 
   const showPostReturnGrowth = hasReturns && retYearsShown.length >= 2;
-  const custHeaders = (years.length >= 2
-    ? ['العميل', 'عدد الفروع', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', ...yearColumnHeaders(years)]
-    : ['العميل', 'عدد الفروع', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', 'الصافي بعد الخصم المباشر والضريبة']
-  ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : [])
-   .concat(showPostReturnGrowth ? ['نسبة النمو بعد المرتجع'] : []);
+
+  // custGroups: نفس ترتيب/طول custHeaders بالظبط - يستخدم للتحكم في إخفاء/إظهار مجموعات أعمدة من دروب داون "أعمدة الجدول"
+  const custGroups = ['customer', 'branches', 'gross', 'discount', 'discountPct', 'tax'];
+  const custHeaders = ['العميل', 'عدد الفروع', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة'];
+  if (years.length >= 2) {
+    const yh = yearColumnHeaders(years);
+    custHeaders.push(...yh); custGroups.push(...yh.map(() => 'net'));
+  } else {
+    custHeaders.push('الصافي بعد الخصم المباشر والضريبة'); custGroups.push('net');
+  }
+  if (hasReturns) {
+    const rh = [...retYearsShown.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'];
+    custHeaders.push(...rh); custGroups.push(...rh.map(() => 'returns'));
+  }
+  if (showPostReturnGrowth) {
+    custHeaders.push('نسبة النمو بعد المرتجع'); custGroups.push('growth');
+  }
 
   const rowsHtml = top.map(x => {
     const invs = inv.filter(i => i['العميل'] === x.key);
@@ -2128,10 +2141,33 @@ function renderCustomers() {
     const discX = invs.reduce((s, i) => s + i.__discount, 0);
     const taxX = invs.reduce((s, i) => s + i.__tax, 0);
     const discPctX = grossX ? discX / grossX : 0;
-    const sitesX = Array.from(new Set(invs.map(i => i['فرع_العميل']).filter(Boolean))).sort();
-    const branchesCell = sitesX.length
-      ? `<details><summary style="cursor:pointer; font-weight:700; color:var(--caramel-dark);">${fmt(sitesX.length)} 📍</summary><div style="margin-top:4px; font-size:11.5px; color:var(--ink-soft); text-align:right; line-height:1.7;">${sitesX.map(s => escapeHtml(s)).join('<br>')}</div></details>`
-      : '-';
+
+    // تفاصيل كل فرع (موقع) للعميل: عدد الفواتير + المبيعات + الصافي - بتتفتح بالضغط على عدد الفروع
+    const siteAgg = new Map();
+    invs.forEach(i => {
+      const site = (i['فرع_العميل'] || '').toString().trim();
+      if (!site) return;
+      if (!siteAgg.has(site)) siteAgg.set(site, { gross: 0, net: 0, count: 0 });
+      const s = siteAgg.get(site);
+      s.gross += i.__gross; s.net += i.__net; s.count += 1;
+    });
+    const sitesX = Array.from(siteAgg.keys()).sort((a, b) => a.localeCompare(b, 'ar'));
+    let branchesCell = '-';
+    if (sitesX.length) {
+      const siteRows = sitesX.map(site => {
+        const s = siteAgg.get(site);
+        return `<tr><td style="padding:3px 5px; text-align:right; border-bottom:1px solid var(--sand);">${escapeHtml(site)}</td><td style="padding:3px 5px; border-bottom:1px solid var(--sand);">${fmtMoney(s.gross)}</td><td style="padding:3px 5px; border-bottom:1px solid var(--sand);">${fmtMoney(s.net)}</td></tr>`;
+      }).join('');
+      branchesCell = `<details><summary style="cursor:pointer; font-weight:700; color:var(--caramel-dark);">${fmt(sitesX.length)} 📍</summary>
+        <div style="margin-top:6px; min-width:260px;">
+          <table style="width:100%; border-collapse:collapse; font-size:11px;">
+            <thead><tr style="background:var(--sand);"><th style="padding:3px 5px; text-align:right; font-weight:700;">الفرع</th><th style="padding:3px 5px; font-weight:700;">المبيعات</th><th style="padding:3px 5px; font-weight:700;">الصافي</th></tr></thead>
+            <tbody>${siteRows}</tbody>
+          </table>
+          ${hasReturns ? '<div style="font-size:10px; color:var(--ink-soft); margin-top:4px;">* المرتجعات مسجلة على مستوى العميل ككل مش لكل فرع، فمش موزعة هنا.</div>' : ''}
+        </div>
+      </details>`;
+    }
     const base = years.length >= 2
       ? [x.key, branchesCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)]
       : [x.key, branchesCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
@@ -2205,6 +2241,31 @@ function renderCustomers() {
     }
   }
 
+  // دروب داون "أعمدة الجدول" - تحكم في إظهار/إخفاء مجموعات أعمدة (عمود العميل ثابت دايمًا)
+  const custColLabels = {
+    branches: 'عدد الفروع', gross: 'إجمالي قبل الخصم', discount: 'خصم مباشر',
+    discountPct: 'نسبة الخصم المباشر', tax: 'الضريبة',
+    net: years.length >= 2 ? 'الصافي (حسب السنة + الفرق والنمو)' : 'الصافي بعد الخصم المباشر والضريبة',
+    returns: 'المرتجعات', growth: 'نسبة النمو بعد المرتجع'
+  };
+  const custColAvailable = Array.from(new Set(custGroups.filter(g => g !== 'customer')));
+  const colToggleHtml = `
+    <div class="msfilter no-print" style="display:inline-block; margin-bottom:10px;">
+      <button type="button" class="ms-btn" id="custColBtn">🧮 أعمدة الجدول ▾</button>
+      <div class="ms-panel" id="custColPanel">
+        ${custColAvailable.map(g => `
+          <label class="ms-item">
+            <input type="checkbox" class="cust-col-toggle" data-col="${g}" ${state.custHiddenCols.has(g) ? '' : 'checked'}>
+            <span>${custColLabels[g] || g}</span>
+          </label>`).join('')}
+      </div>
+    </div>
+  `;
+  const keepCol = (i) => custGroups[i] === 'customer' || !state.custHiddenCols.has(custGroups[i]);
+  const visibleHeaders = custHeaders.filter((_, i) => keepCol(i));
+  const visibleRows = rowsHtml.map(r => r.filter((_, i) => keepCol(i)));
+  const visibleFooter = custFooter.filter((_, i) => keepCol(i));
+
   el.innerHTML = `
     <div class="grid2">
       <div class="chart-box"><canvas id="chTopCustomers"></canvas></div>
@@ -2212,10 +2273,30 @@ function renderCustomers() {
     </div>
     <div class="table-title">كل العملاء (${fmt(top.length)} عميل) - مع الخصم المباشر والصافي بعد الخصم المباشر والضريبة${hasReturns ? ' والمرتجعات' : ''}</div>
     ${returnsNote}
-    <div class="table-wrap">${tableHTML(custHeaders, rowsHtml, custFooter)}</div>
+    ${colToggleHtml}
+    <div class="table-wrap">${tableHTML(visibleHeaders, visibleRows, visibleFooter)}</div>
   `;
   makeChart('chTopCustomers', barConfig(top.slice(0, 10).map(x => x.key), top.slice(0, 10).map(x => x.sum), 'صافي المبيعات', true));
   makeChart('chCashCredit', pieConfig(byCash.map(x => x.key), byCash.map(x => x.sum)));
+
+  const colBtn = el.querySelector('#custColBtn');
+  const colPanel = el.querySelector('#custColPanel');
+  if (colBtn && colPanel) {
+    colBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.ms-panel.open').forEach(p => { if (p !== colPanel) p.classList.remove('open'); });
+      colPanel.classList.toggle('open');
+    });
+    colPanel.querySelectorAll('.cust-col-toggle').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const col = cb.dataset.col;
+        if (cb.checked) state.custHiddenCols.delete(col); else state.custHiddenCols.add(col);
+        renderCustomers();
+        const reopened = document.getElementById('custColPanel');
+        if (reopened) reopened.classList.add('open');
+      });
+    });
+  }
 }
 
 /* ---------------- المناديب وخطوط السير ---------------- */
