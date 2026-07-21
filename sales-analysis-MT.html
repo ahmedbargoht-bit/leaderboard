@@ -185,6 +185,11 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
 .empty-state { text-align:center; padding: 40px 20px; color: var(--ink-soft); }
 .pill-note { background:#FCEBD5; color:#9A5B00; border-radius:10px; padding:10px 14px; font-size:12.5px; margin-bottom:12px; }
 
+table.datatable details summary { list-style: none; cursor: pointer; }
+table.datatable details summary::-webkit-details-marker { display: none; }
+table.datatable details summary::marker { display: none; content: ""; }
+table.datatable details summary:hover { text-decoration: underline; }
+
 #printBtn {
   position: fixed; bottom: 24px; left: 24px; z-index: 50;
 }
@@ -205,6 +210,10 @@ table.datatable tfoot .total-row td { background: var(--sand-dark); color: var(-
   /* طباعة جدول واحد بس من تاب "الخصم غير المباشر" (سنوي أو شهري) - بيخفي الجدول التاني وقتيًا */
   body.print-only-yearly #indirectMonthlyBlock { display: none !important; }
   body.print-only-monthly #indirectYearlyBlock { display: none !important; }
+
+  /* إظهار كل تفاصيل الفروع (details/summary) كاملة عند الطباعة حتى لو مقفولة على الشاشة */
+  table.datatable details:not([open]) > *:not(summary) { display: block !important; }
+  table.datatable details summary::after { content: ""; }
   .no-print { display: none !important; }
   body { background: #fff; }
   .card, .chart-box { box-shadow:none; border:1px solid #ddd; margin: 10px 0 !important; padding: 10px !important; }
@@ -2108,8 +2117,8 @@ function renderCustomers() {
 
   const showPostReturnGrowth = hasReturns && retYearsShown.length >= 2;
   const custHeaders = (years.length >= 2
-    ? ['العميل', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', ...yearColumnHeaders(years)]
-    : ['العميل', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', 'الصافي بعد الخصم المباشر والضريبة']
+    ? ['العميل', 'عدد الفروع', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', ...yearColumnHeaders(years)]
+    : ['العميل', 'عدد الفروع', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة', 'الصافي بعد الخصم المباشر والضريبة']
   ).concat(hasReturns ? [...retYearsShown.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : [])
    .concat(showPostReturnGrowth ? ['نسبة النمو بعد المرتجع'] : []);
 
@@ -2119,9 +2128,13 @@ function renderCustomers() {
     const discX = invs.reduce((s, i) => s + i.__discount, 0);
     const taxX = invs.reduce((s, i) => s + i.__tax, 0);
     const discPctX = grossX ? discX / grossX : 0;
+    const sitesX = Array.from(new Set(invs.map(i => i['فرع_العميل']).filter(Boolean))).sort();
+    const branchesCell = sitesX.length
+      ? `<details><summary style="cursor:pointer; font-weight:700; color:var(--caramel-dark);">${fmt(sitesX.length)} 📍</summary><div style="margin-top:4px; font-size:11.5px; color:var(--ink-soft); text-align:right; line-height:1.7;">${sitesX.map(s => escapeHtml(s)).join('<br>')}</div></details>`
+      : '-';
     const base = years.length >= 2
-      ? [x.key, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)]
-      : [x.key, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
+      ? [x.key, branchesCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)]
+      : [x.key, branchesCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
     if (hasReturns) {
       const normKey = SalesParser.normalizeCustomerKey(x.key);
       const retYm = retYearBmap.get(normKey) || new Map();
@@ -2155,9 +2168,10 @@ function renderCustomers() {
   const topTax = topInvs.reduce((s, i) => s + i.__tax, 0);
   const topNet = top.reduce((s, x) => s + x.sum, 0);
   const topDiscPct = topGross ? topDisc / topGross : 0;
+  const topSitesCount = new Set(topInvs.map(i => i['فرع_العميل']).filter(Boolean)).size;
   const custFooterBase = years.length >= 2
-    ? ['الإجمالي (كل العملاء)', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), ...yearColumnCells(sumYearTotalsBmap(custBmap, topKeys, years), '__TOTAL__', years, fmtMoney)]
-    : ['الإجمالي (كل العملاء)', fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), `<b>${fmtMoney(topNet)}</b>`];
+    ? ['الإجمالي (كل العملاء)', fmt(topSitesCount), fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), ...yearColumnCells(sumYearTotalsBmap(custBmap, topKeys, years), '__TOTAL__', years, fmtMoney)]
+    : ['الإجمالي (كل العملاء)', fmt(topSitesCount), fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), `<b>${fmtMoney(topNet)}</b>`];
   let custFooter = custFooterBase;
   if (hasReturns) {
     const topNormKeys = topKeys.map(k => SalesParser.normalizeCustomerKey(k));
