@@ -1998,14 +1998,17 @@ table.datatable details summary:hover { text-decoration: underline; }
     });
     const indirectByCust = indirectDiscountByCustomerFiltered();
 
-    // إجمالي مبيعات كل عميل + الفترة الفعلية المغطاة (أقدم وأحدث فاتورة مطابقة)
+    // إجمالي مبيعات كل عميل + الفترة الفعلية المغطاة (أقدم وأحدث فاتورة مطابقة) + عدد فروع/مواقع
+    // العميل نفسه الكلي (مواقعه المختلفة من عمود فرع_العميل، بغض النظر عن أي فرع من فروعنا خدمها) -
+    // نفس تعريف "عدد الفروع" المستخدم في تاب "خصومات العملاء".
     const custTotal = new Map();
     inv.forEach(i => {
       const c = i['العميل'];
       if (!c) return;
-      if (!custTotal.has(c)) custTotal.set(c, { gross: 0, direct: 0, minDate: null, maxDate: null });
+      if (!custTotal.has(c)) custTotal.set(c, { gross: 0, direct: 0, minDate: null, maxDate: null, sites: new Set() });
       const e = custTotal.get(c);
       e.gross += i.__gross; e.direct += i.__discount;
+      if (i['فرع_العميل']) e.sites.add(i['فرع_العميل']);
       if (i.__date) {
         if (!e.minDate || i.__date < e.minDate) e.minDate = i.__date;
         if (!e.maxDate || i.__date > e.maxDate) e.maxDate = i.__date;
@@ -2036,7 +2039,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       const branchRet = retByBranchCust.get(branch + '||' + normKey) || 0;
       const branchNet = e.gross - e.direct - branchRet;
 
-      const ct = custTotal.get(cust) || { gross: 0, direct: 0, minDate: null, maxDate: null };
+      const ct = custTotal.get(cust) || { gross: 0, direct: 0, minDate: null, maxDate: null, sites: new Set() };
       const custTotalRet = retByCustNorm.get(normKey) || 0;
       const custTotalNet = ct.gross - ct.direct - custTotalRet;
       const custIndirectPct = custTotalNet ? custIndirect / custTotalNet : 0;
@@ -2045,7 +2048,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       if (!branchNet && !branchAllocated) return;
 
       if (!byCustomer.has(cust)) {
-        byCustomer.set(cust, { custTotalNet, custIndirect, custIndirectPct, minDate: ct.minDate, maxDate: ct.maxDate, rows: [] });
+        byCustomer.set(cust, { custTotalNet, custIndirect, custIndirectPct, minDate: ct.minDate, maxDate: ct.maxDate, custSitesCount: ct.sites.size, rows: [] });
       }
       byCustomer.get(cust).rows.push({ branch, branchNet, siteCount: e.sites.size, branchShare, branchAllocated });
     });
@@ -2103,8 +2106,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     let sumTotSales = 0, sumTotBranches = 0, sumTotNet = 0, sumTotDisc = 0;
     customersSorted.forEach(([cust, data], idx) => {
       const netAfter = data.custTotalNet - data.custIndirect;
-      sumTotSales += data.custTotalNet; sumTotBranches += data.rows.length; sumTotNet += netAfter; sumTotDisc += data.custIndirect;
-      const row = wsSum.addRow([cust, data.custTotalNet, data.rows.length, netAfter, data.custIndirectPct]);
+      sumTotSales += data.custTotalNet; sumTotBranches += data.custSitesCount; sumTotNet += netAfter; sumTotDisc += data.custIndirect;
+      const row = wsSum.addRow([cust, data.custTotalNet, data.custSitesCount, netAfter, data.custIndirectPct]);
       if (idx % 2 === 1) row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
       row.getCell(1).alignment = { horizontal: 'right' };
       row.getCell(2).numFmt = numFmt;
