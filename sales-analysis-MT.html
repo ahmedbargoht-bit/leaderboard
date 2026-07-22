@@ -348,6 +348,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <button class="tabbtn" data-tab="panel-linkroutes" data-label="ربط خطوط السير">ربط خطوط السير</button>
       <button class="tabbtn" data-tab="panel-indirect" data-label="الخصم غير المباشر">الخصم غير المباشر</button>
       <button class="tabbtn" data-tab="panel-linkindirect" data-label="ربط عملاء الخصم">ربط عملاء الخصم</button>
+      <button class="tabbtn" data-tab="panel-customerdiscounts" data-label="خصومات العملاء">خصومات العملاء</button>
     </div>
 
     <div class="print-only" id="printFilterSummary"></div>
@@ -364,6 +365,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <div class="tabpanel" id="panel-linkroutes"></div>
       <div class="tabpanel" id="panel-indirect"></div>
       <div class="tabpanel" id="panel-linkindirect"></div>
+      <div class="tabpanel" id="panel-customerdiscounts"></div>
     </div>
   </div>
 
@@ -1526,6 +1528,22 @@ table.datatable details summary:hover { text-decoration: underline; }
     const manual = state.manualIndirectLinks.get(discountCustomerName);
     return manual || null;
   }
+  // إجمالي الخصم غير المباشر لكل عميل فواتير (مطابق) بعد تطبيق فلاتر السنة/الشهر العامة (فلتر الأعلى)،
+  // مع مراعاة توزيع القيود اللي نصها بيغطي أكتر من فترة (__splitPeriods) - كل فترة بتتفلتر لوحدها
+  // مش القيد كله دفعة واحدة، عشان لو القيد بيغطي سنتين ومختار سنة واحدة بس، ياخد نصيبه الصح بس.
+  function indirectDiscountByCustomerFiltered() {
+    const map = new Map();
+    state.indirectDiscounts.forEach(d => {
+      const matched = resolveIndirectCustomer(d['العميل']);
+      if (!matched) return;
+      const periods = d.__splitPeriods || [{ year: d.__year, month: d.__month, amount: d['المبلغ'] || 0 }];
+      periods.forEach(p => {
+        if (!matchFilter('year', p.year) || !matchFilter('month', p.month)) return;
+        map.set(matched, (map.get(matched) || 0) + p.amount);
+      });
+    });
+    return map;
+  }
   // يبني/يحدّث فهرس أسماء عملاء الفواتير (بالاسم المطبّع) - يُستدعى كل ما تتغير قائمة الفواتير
   function rebuildInvoiceCustomerIndex() {
     const map = new Map();
@@ -1835,6 +1853,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     renderLinkRoutes();
     renderIndirectDiscounts();
     renderLinkIndirect();
+    renderCustomerDiscounts();
     renderPrintFilterSummary();
   }
 
@@ -2776,6 +2795,77 @@ function renderLinkIndirect() {
       await assignManualIndirectLink(rowData.discCustomer, matchedCustomer);
     });
   });
+}
+
+/* ---------------- خصومات العملاء (ملخص: خصم مباشر + خصم غير مباشر + الصافي النهائي) ---------------- */
+function renderCustomerDiscounts() {
+  const el = document.getElementById('panel-customerdiscounts');
+  if (!el) return;
+  const inv = filteredInvoices();
+  if (!inv.length) { el.innerHTML = emptyState('ارفع ملفات الفواتير أولًا'); return; }
+
+  const returnRows = filteredReturns();
+  const retByCustNorm = new Map();
+  returnRows.forEach(r => {
+    const k = r.__عميل_مطابق;
+    retByCustNorm.set(k, (retByCustNorm.get(k) || 0) + (r['الإجمالي'] || 0));
+  });
+  const indirectByCust = indirectDiscountByCustomerFiltered();
+
+  const customers = Array.from(new Set(inv.map(i => i['العميل']).filter(Boolean)));
+  const rowsData = customers.map(cust => {
+    const invs = inv.filter(i => i['العميل'] === cust);
+    const grossX = invs.reduce((s, i) => s + i.__gross, 0);
+    const discX = invs.reduce((s, i) => s + i.__discount, 0);
+    const normKey = SalesParser.normalizeCustomerKey(cust);
+    const retX = retByCustNorm.get(normKey) || 0;
+    // المبيعات بعد خصم المرتجع وبعد خصم الضريبة: __gross أصلًا مستبعد منه الضريبة (راجع صيغة صافي المبيعات)
+    const salesAfterReturnTax = grossX - retX;
+    const discPct = grossX ? discX / grossX : 0;
+    const netAfterDirect = salesAfterReturnTax - discX;
+    const indirectX = indirectByCust.get(cust) || 0;
+    const indirectPct = netAfterDirect ? indirectX / netAfterDirect : 0;
+    const totalDiscounts = discX + indirectX;
+    const finalNet = netAfterDirect - indirectX;
+    const sitesCount = new Set(invs.map(i => i['فرع_العميل']).filter(Boolean)).size;
+    return { cust, sitesCount, salesAfterReturnTax, discX, discPct, indirectX, indirectPct, totalDiscounts, finalNet };
+  }).sort((a, b) => b.finalNet - a.finalNet);
+
+  const headers = ['العميل', 'عدد الفروع', 'المبيعات بعد خصم المرتجع والضريبة', 'الخصم المباشر', 'نسبة الخصم المباشر', 'الخصم غير المباشر', 'نسبة الخصم غير المباشر', 'إجمالي الخصومات', 'الصافي بعد كل الخصومات'];
+  const rowsHtml = rowsData.map(r => [
+    r.cust,
+    fmt(r.sitesCount),
+    fmtMoney(r.salesAfterReturnTax),
+    r.discX ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(r.discX)}</span>` : fmtMoney(0),
+    fmtPct(r.discPct),
+    r.indirectX ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(r.indirectX)}</span>` : fmtMoney(0),
+    fmtPct(r.indirectPct),
+    r.totalDiscounts ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(r.totalDiscounts)}</span>` : fmtMoney(0),
+    `<b>${fmtMoney(r.finalNet)}</b>`
+  ]);
+
+  const totalSites = new Set(inv.map(i => i['فرع_العميل']).filter(Boolean)).size;
+  const totalSales = rowsData.reduce((s, r) => s + r.salesAfterReturnTax, 0);
+  const totalDirect = rowsData.reduce((s, r) => s + r.discX, 0);
+  const totalIndirect = rowsData.reduce((s, r) => s + r.indirectX, 0);
+  const totalAllDisc = rowsData.reduce((s, r) => s + r.totalDiscounts, 0);
+  const totalFinalNet = rowsData.reduce((s, r) => s + r.finalNet, 0);
+  const totalNetAfterDirect = totalSales - totalDirect;
+  const footer = [
+    'الإجمالي (كل العملاء)', fmt(totalSites), fmtMoney(totalSales),
+    `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalDirect)}</span>`,
+    fmtPct(totalSales ? totalDirect / totalSales : 0),
+    `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalIndirect)}</span>`,
+    fmtPct(totalNetAfterDirect ? totalIndirect / totalNetAfterDirect : 0),
+    `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalAllDisc)}</span>`,
+    `<b>${fmtMoney(totalFinalNet)}</b>`
+  ];
+
+  el.innerHTML = `
+    <div class="table-title">خصومات العملاء (${fmt(rowsData.length)} عميل) - الخصم المباشر وغير المباشر والصافي النهائي</div>
+    <div class="hint" style="margin-bottom:10px;">"المبيعات بعد خصم المرتجع والضريبة" = صافي مبيعات العميل بعد خصم المرتجعات فقط (الضريبة مستبعدة أصلًا من الحساب من الأساس). "نسبة الخصم غير المباشر" محسوبة من الصافي بعد خصم المرتجع والخصم المباشر. "الخصم غير المباشر" هنا بيراعي فلاتر السنة/الشهر فوق الصفحة، وبيوزّع القيود اللي بتغطي أكتر من فترة (زي شرحنا في تاب "الخصم غير المباشر") على الفترة الصح.</div>
+    <div class="table-wrap">${tableHTML(headers, rowsHtml, footer)}</div>
+  `;
 }
 
 /* ---------------- الخصم غير المباشر: الصافي قبل/بعد لكل عميل/شهر ---------------- */
