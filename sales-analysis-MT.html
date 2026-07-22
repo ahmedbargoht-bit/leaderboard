@@ -2080,6 +2080,47 @@ table.datatable details summary:hover { text-decoration: underline; }
     // أكبر عميل (بقيمة الخصم غير المباشر) الأول
     const customersSorted = Array.from(byCustomer.entries()).sort((a, b) => b[1].custIndirect - a[1].custIndirect);
 
+    // شيت أول: ملخص خصومات العملاء (صف واحد لكل عميل) - قبل شيتات التفصيل بتاعة كل عميل لوحده
+    const wsSum = wb.addWorksheet('خصومات العملاء', { views: [{ rightToLeft: true }] });
+    wsSum.columns = [{ width: 34 }, { width: 20 }, { width: 14 }, { width: 20 }, { width: 16 }];
+    if (logoImgId) wsSum.addImage(logoImgId, { tl: { col: 3.3, row: 0.15 }, ext: { width: 60, height: 60 } });
+    wsSum.mergeCells('A1:C1');
+    const sumTitle = wsSum.getCell('A1');
+    sumTitle.value = 'ملخص خصومات العملاء (الخصم غير المباشر)';
+    sumTitle.font = { bold: true, size: 14, color: { argb: INK } };
+    sumTitle.alignment = { horizontal: 'right', vertical: 'middle' };
+    wsSum.getRow(1).height = 26;
+    wsSum.addRow([]);
+
+    const sumHdr = wsSum.addRow(['العميل', 'المبيعات المحققة', 'عدد الفروع', 'الصافي بعد الخصم غير المباشر', 'نسبة الخصم']);
+    sumHdr.eachCell(c => {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+      c.font = { bold: true, color: { argb: SAND } };
+      c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    });
+    sumHdr.height = 30;
+
+    let sumTotSales = 0, sumTotBranches = 0, sumTotNet = 0, sumTotDisc = 0;
+    customersSorted.forEach(([cust, data], idx) => {
+      const netAfter = data.custTotalNet - data.custIndirect;
+      sumTotSales += data.custTotalNet; sumTotBranches += data.rows.length; sumTotNet += netAfter; sumTotDisc += data.custIndirect;
+      const row = wsSum.addRow([cust, data.custTotalNet, data.rows.length, netAfter, data.custIndirectPct]);
+      if (idx % 2 === 1) row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      row.getCell(1).alignment = { horizontal: 'right' };
+      row.getCell(2).numFmt = numFmt;
+      row.getCell(4).numFmt = numFmt;
+      row.getCell(5).numFmt = '0.0%';
+    });
+    const sumTotRow = wsSum.addRow(['الإجمالي', sumTotSales, sumTotBranches, sumTotNet, sumTotSales ? sumTotDisc / sumTotSales : 0]);
+    sumTotRow.eachCell(c => {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+      c.font = { bold: true, color: { argb: INK } };
+      c.border = { top: { style: 'medium', color: { argb: INK } } };
+    });
+    sumTotRow.getCell(2).numFmt = numFmt;
+    sumTotRow.getCell(4).numFmt = numFmt;
+    sumTotRow.getCell(5).numFmt = '0.0%';
+
     customersSorted.forEach(([cust, data]) => {
       const ws = wb.addWorksheet(safeSheetName(cust), { views: [{ rightToLeft: true }] });
       ws.columns = [{ width: 26 }, { width: 14 }, { width: 18 }, { width: 16 }, { width: 20 }];
