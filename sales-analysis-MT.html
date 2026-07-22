@@ -1448,6 +1448,48 @@ table.datatable details summary:hover { text-decoration: underline; }
   }
 
   /* ---------------- الخصم غير المباشر (كشف حساب العملاء) ---------------- */
+  // لو نص "ملاحظة" القيد فيه ذكر لفترات مختلفة، نوزّع مبلغ القيد بدل ما نحطه كله على تاريخ القيد الرسمي في الملف:
+  // 1) الأولوية لصيغة دقيقة "شهر <رقم>/<سنة>" (زي "شهر 12/2025 وشهر 1/2026") - بتوزع على الشهر/السنة بالظبط.
+  // 2) لو مفيش صيغة شهر واضحة، بندور على أي سنين لوحدها مذكورة في النص (زي "...عقد 2026 وافتتاحات خلال 2025")
+  //    وبنوزع على السنين دي (بنفس شهر تاريخ القيد الرسمي، لأن الشهر مش مهم هنا - المهم السنة الصح).
+  // 3) غير كده (مفيش ولا شهر ولا سنة تانية مذكورة) بيفضل ياخد تاريخ القيد الرسمي زي ما هو (مفيش تقسيم).
+  const INDIRECT_NOTE_MONTH_RE = /شهر\s*(\d{1,2})\s*\/\s*(\d{4})/g;
+  const INDIRECT_NOTE_YEAR_RE = /\b(20\d{2})\b/g;
+  function computeIndirectSplitPeriods(d) {
+    const note = (d['ملاحظة'] || '').toString();
+
+    const monthFound = [];
+    let m;
+    INDIRECT_NOTE_MONTH_RE.lastIndex = 0;
+    while ((m = INDIRECT_NOTE_MONTH_RE.exec(note))) {
+      const mo = parseInt(m[1], 10), yr = parseInt(m[2], 10);
+      if (mo >= 1 && mo <= 12 && yr > 2000) monthFound.push({ year: yr, month: mo, monthKey: yr + '-' + String(mo).padStart(2, '0') });
+    }
+    const seenM = new Set();
+    const uniqueMonthPeriods = monthFound.filter(p => (seenM.has(p.monthKey) ? false : (seenM.add(p.monthKey), true)));
+    if (uniqueMonthPeriods.length >= 2) {
+      const share = (d['المبلغ'] || 0) / uniqueMonthPeriods.length;
+      d.__splitPeriods = uniqueMonthPeriods.map(p => ({ year: p.year, month: p.month, monthKey: p.monthKey, amount: share }));
+      d.__splitFromNote = true;
+      return;
+    }
+
+    const yearFound = [];
+    let ym2;
+    INDIRECT_NOTE_YEAR_RE.lastIndex = 0;
+    while ((ym2 = INDIRECT_NOTE_YEAR_RE.exec(note))) yearFound.push(parseInt(ym2[1], 10));
+    const uniqueYears = Array.from(new Set(yearFound));
+    if (uniqueYears.length >= 2) {
+      const fallbackMonth = d.__month || 1;
+      const share = (d['المبلغ'] || 0) / uniqueYears.length;
+      d.__splitPeriods = uniqueYears.map(yr => ({ year: yr, month: fallbackMonth, monthKey: yr + '-' + String(fallbackMonth).padStart(2, '0'), amount: share }));
+      d.__splitFromNote = true;
+      return;
+    }
+
+    d.__splitPeriods = [{ year: d.__year, month: d.__month, monthKey: d.__monthKey, amount: d['المبلغ'] || 0 }];
+    d.__splitFromNote = false;
+  }
   function tagIndirectDiscount(d, fileName) {
     d.__fileName = fileName;
     const dt = d['التاريخ'] instanceof Date ? d['التاريخ'] : null;
@@ -1455,6 +1497,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     d.__month = dt ? (dt.getMonth() + 1) : null;
     d.__quarter = dt ? Math.ceil((dt.getMonth() + 1) / 3) : null;
     d.__monthKey = dt ? (dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0')) : null;
+    computeIndirectSplitPeriods(d);
   }
   function indirectDiscountKey(d) { return (d.__fileName || '') + '||' + (d['العميل'] || '') + '||' + d.__lineNo; }
   function indirectDiscountToDbRow(d) {
@@ -1465,12 +1508,14 @@ table.datatable details summary:hover { text-decoration: underline; }
     };
   }
   function dbRowToIndirectDiscount(row) {
-    return {
+    const d = {
       __fileName: row.file_name, 'العميل': row.customer, __عميل_مطابق: row.customer_norm, __lineNo: row.line_no,
       'التاريخ': row.invoice_date ? new Date(row.invoice_date) : null, 'الفرع': row.branch,
       'المبلغ': Number(row.amount) || 0, 'ملاحظة': row.note,
       __year: row.year, __month: row.month, __quarter: row.quarter, __monthKey: row.month_key
     };
+    computeIndirectSplitPeriods(d);
+    return d;
   }
   // مطابقة اسم عميل الخصم (كما هو في كشف الحساب) باسم عميل الفواتير: أولًا بالاسم المطابق تمامًا
   // (بعد التطبيع)، وإلا بالربط اليدوي المحفوظ في السحابة.
@@ -2794,18 +2839,26 @@ function renderIndirectDiscounts() {
   const retYearMap = yearBreakdownMap(returnRows, r => r.__عميل_مطابق, r => r.__year, r => r['الإجمالي']);
 
   // نطابق كل قيد خصم بعميل الفواتير (تلقائي أو يدوي) - واللي مش متطابق بنجمعه في تحذير منفصل
+  // القيود اللي نصها فيه ذكر صريح لأكتر من شهر/سنة (زي "شهر 12/2025 وشهر 1/2026") بتتوزع على الفترات دي
+  // (__splitPeriods) بدل ما تتحسب كلها على تاريخ القيد الرسمي - راجع computeIndirectSplitPeriods في app.js.
   let unmatchedTotal = 0, unmatchedCount = 0;
+  let splitCount = 0;
+  let splitExampleNote = '';
   const discMonthMap = new Map(); // customer -> monthKey -> sum
   const discYearMap = new Map(); // customer -> year -> sum
   discAll.forEach(d => {
     const matched = resolveIndirectCustomer(d['العميل']);
     if (!matched) { unmatchedTotal += d['المبلغ']; unmatchedCount++; return; }
+    if (d.__splitFromNote) { splitCount++; if (!splitExampleNote) splitExampleNote = (d['ملاحظة'] || '').toString(); }
     if (!discMonthMap.has(matched)) discMonthMap.set(matched, new Map());
-    const mm = discMonthMap.get(matched);
-    mm.set(d.__monthKey, (mm.get(d.__monthKey) || 0) + d['المبلغ']);
     if (!discYearMap.has(matched)) discYearMap.set(matched, new Map());
+    const mm = discMonthMap.get(matched);
     const ym = discYearMap.get(matched);
-    ym.set(d.__year, (ym.get(d.__year) || 0) + d['المبلغ']);
+    const periods = d.__splitPeriods || [{ year: d.__year, month: d.__month, monthKey: d.__monthKey, amount: d['المبلغ'] || 0 }];
+    periods.forEach(p => {
+      mm.set(p.monthKey, (mm.get(p.monthKey) || 0) + p.amount);
+      ym.set(p.year, (ym.get(p.year) || 0) + p.amount);
+    });
   });
 
   // نطاق العملاء: 'discounted' = بس العملاء اللي عليهم خصم غير مباشر مسجل، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
@@ -2918,6 +2971,9 @@ function renderIndirectDiscounts() {
   let note = `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ إجمالي الخصم غير المباشر (عملاء متطابقين): <b>${fmtMoney(totalDisc)}</b></div>`;
   if (unmatchedCount) {
     note += `<div class="pill-note">⚠ ${fmtMoney(unmatchedTotal)} من الخصم غير المباشر (${fmt(unmatchedCount)} قيد) لعملاء مش متطابقين مع فواتير المبيعات - غير محتسبة هنا. اربطهم من تاب "ربط عملاء الخصم".</div>`;
+  }
+  if (splitCount) {
+    note += `<div class="pill-note">🔀 ${fmt(splitCount)} قيد لقينا في ملاحظته ذكر صريح لأكتر من شهر أو سنة (زي: "${escapeHtml(splitExampleNote)}") - اتوزّع مبلغه بالتساوي على الفترات (سنوات/شهور) المذكورة دي بدل ما يتحسب كله على تاريخ القيد الرسمي في الملف.</div>`;
   }
   if (customerScope === 'all') {
     note += `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✅ الجدولين تحت بيغطوا كل عملاء الفواتير (${fmt(yearlyCustomers.length)} عميل) - بما فيهم اللي مالهمش خصم غير مباشر خالص (بيظهروا بخصم = صفر). الإجمالي هنا لازم يتطابق تمامًا مع صافي المبيعات في تاب "العملاء".</div>`;
