@@ -364,6 +364,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <button class="tabbtn" data-tab="panel-indirect" data-label="الخصم غير المباشر">الخصم غير المباشر</button>
       <button class="tabbtn" data-tab="panel-linkindirect" data-label="ربط عملاء الخصم">ربط عملاء الخصم</button>
       <button class="tabbtn" data-tab="panel-customerdiscounts" data-label="خصومات العملاء">خصومات العملاء</button>
+      <button class="tabbtn" data-tab="panel-branchindirect" data-label="توزيع الخصم على الفروع">توزيع الخصم على الفروع</button>
     </div>
 
     <div class="print-only" id="printFilterSummary"></div>
@@ -381,6 +382,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <div class="tabpanel" id="panel-indirect"></div>
       <div class="tabpanel" id="panel-linkindirect"></div>
       <div class="tabpanel" id="panel-customerdiscounts"></div>
+      <div class="tabpanel" id="panel-branchindirect"></div>
     </div>
   </div>
 
@@ -1756,6 +1758,25 @@ table.datatable details summary:hover { text-decoration: underline; }
       matchFilter('month', d.__month)
     );
   }
+  // زي filteredInvoices/filteredReturns بالظبط لكن من غير فلتر الفرع عمدًا - مستخدمة في تاب "توزيع الخصم غير
+  // المباشر على الفروع" عشان نحسب إجمالي مبيعات كل عميل في كل فروع الشركة صح (بغض النظر عن فلتر الفرع الحالي فوق الصفحة)،
+  // لأن نسبة خصم العميل لازم تتحسب من مبيعاته الكاملة مش من فرع واحد بس.
+  function invoicesForBranchAllocation() {
+    return state.invoices.filter(inv =>
+      matchFilter('activity', inv.__activity) &&
+      matchFilter('year', inv.__year) &&
+      matchFilter('month', inv.__month) &&
+      matchFilter('rep', inv['المندوب'])
+    );
+  }
+  function returnsForBranchAllocation() {
+    return state.returns.filter(r =>
+      matchFilter('activity', r.__activity) &&
+      matchFilter('year', r.__year) &&
+      matchFilter('month', r.__month) &&
+      matchFilter('item', r['الصنف'])
+    );
+  }
 
   /* ---------------- Aggregation helpers ---------------- */
   function groupSum(rows, keyFn, sumFn) {
@@ -1976,6 +1997,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     renderIndirectDiscounts();
     renderLinkIndirect();
     renderCustomerDiscounts();
+    renderBranchIndirect();
     renderPrintFilterSummary();
   }
 
@@ -3005,6 +3027,117 @@ function renderCustomerDiscounts() {
       <div class="sig-block">مدير مبيعات مودرن تريد<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
       <div class="sig-block">مدير عام المبيعات<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
     </div>
+  `;
+}
+
+/* ---------------- توزيع الخصم غير المباشر على فروع الشركة ----------------
+   الخصم غير المباشر مسجل على مستوى العميل ككل (مش لكل فرع) - فبنحسب نسبة خصمه من إجمالي مبيعاته
+   في كل فروع الشركة (بغض النظر عن فلتر الفرع الحالي)، وبعدين نطبّق نفس النسبة على مبيعات نفس العميل
+   في كل فرع على حدة، عشان كل فرع ياخد نصيبه من الخصم على قد المبيعات اللي هو باعها فعلًا لنفس العميل. */
+function renderBranchIndirect() {
+  const el = document.getElementById('panel-branchindirect');
+  if (!el) return;
+  const inv = invoicesForBranchAllocation();
+  if (!inv.length) { el.innerHTML = emptyState('ارفع ملفات الفواتير أولًا'); return; }
+
+  const returnRows = returnsForBranchAllocation();
+  const retByCustNorm = new Map(); // مرتجعات كل عميل - إجمالي الشركة كلها
+  const retByBranchCust = new Map(); // مرتجعات كل عميل - لكل فرع لوحده (key: فرع||اسم العميل)
+  returnRows.forEach(r => {
+    const normKey = r.__عميل_مطابق;
+    retByCustNorm.set(normKey, (retByCustNorm.get(normKey) || 0) + (r['الإجمالي'] || 0));
+    const br = r['الفرع'] || 'غير محدد';
+    const bk = br + '||' + normKey;
+    retByBranchCust.set(bk, (retByBranchCust.get(bk) || 0) + (r['الإجمالي'] || 0));
+  });
+
+  const indirectByCust = indirectDiscountByCustomerFiltered(); // إجمالي الخصم غير المباشر لكل عميل مطابق - الشركة كلها
+
+  // إجمالي مبيعات كل عميل (بعد الخصم المباشر) في كل فروع الشركة
+  const custTotal = new Map(); // customer -> { gross, direct }
+  inv.forEach(i => {
+    const c = i['العميل'];
+    if (!c) return;
+    if (!custTotal.has(c)) custTotal.set(c, { gross: 0, direct: 0 });
+    const e = custTotal.get(c);
+    e.gross += i.__gross; e.direct += i.__discount;
+  });
+
+  // مبيعات كل فرع من كل عميل (بعد الخصم المباشر)
+  const branchCust = new Map(); // key: فرع||اسم العميل -> { gross, direct }
+  inv.forEach(i => {
+    const br = i['الفرع'] || 'غير محدد';
+    const c = i['العميل'];
+    if (!c) return;
+    const key = br + '||' + c;
+    if (!branchCust.has(key)) branchCust.set(key, { gross: 0, direct: 0 });
+    const e = branchCust.get(key);
+    e.gross += i.__gross; e.direct += i.__discount;
+  });
+
+  const rowsData = [];
+  branchCust.forEach((e, key) => {
+    const sep = key.indexOf('||');
+    const branch = key.slice(0, sep), cust = key.slice(sep + 2);
+    const normKey = SalesParser.normalizeCustomerKey(cust);
+    const branchRet = retByBranchCust.get(branch + '||' + normKey) || 0;
+    const branchNet = e.gross - e.direct - branchRet;
+
+    const ct = custTotal.get(cust) || { gross: 0, direct: 0 };
+    const custTotalRet = retByCustNorm.get(normKey) || 0;
+    const custTotalNet = ct.gross - ct.direct - custTotalRet;
+
+    const custIndirect = indirectByCust.get(cust) || 0;
+    const custIndirectPct = custTotalNet ? custIndirect / custTotalNet : 0;
+    const branchShare = custTotalNet ? branchNet / custTotalNet : 0;
+    const branchAllocatedIndirect = custIndirectPct * branchNet;
+
+    if (!branchNet && !branchAllocatedIndirect) return;
+    rowsData.push({ branch, cust, branchNet, custTotalNet, branchShare, custIndirect, custIndirectPct, branchAllocatedIndirect });
+  });
+  rowsData.sort((a, b) => a.branch.localeCompare(b.branch, 'ar') || b.branchAllocatedIndirect - a.branchAllocatedIndirect);
+
+  // ملخص لكل فرع - الجدول المهم لأي موازنة فرع
+  const branchSummary = new Map();
+  rowsData.forEach(r => {
+    if (!branchSummary.has(r.branch)) branchSummary.set(r.branch, { net: 0, indirect: 0 });
+    const s = branchSummary.get(r.branch);
+    s.net += r.branchNet; s.indirect += r.branchAllocatedIndirect;
+  });
+  const branches = Array.from(branchSummary.keys()).sort((a, b) => a.localeCompare(b, 'ar'));
+  const summaryRows = branches.map(b => {
+    const s = branchSummary.get(b);
+    const pct = s.net ? s.indirect / s.net : 0;
+    return [
+      b, fmtMoney(s.net),
+      s.indirect ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(s.indirect)}</span>` : fmtMoney(0),
+      fmtPct(pct), `<b>${fmtMoney(s.net - s.indirect)}</b>`
+    ];
+  });
+  const totalNetAll = branches.reduce((s, b) => s + branchSummary.get(b).net, 0);
+  const totalIndirectAll = branches.reduce((s, b) => s + branchSummary.get(b).indirect, 0);
+  const summaryFooter = [
+    'الإجمالي (كل الفروع)', fmtMoney(totalNetAll),
+    totalIndirectAll ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalIndirectAll)}</span>` : fmtMoney(0),
+    fmtPct(totalNetAll ? totalIndirectAll / totalNetAll : 0), `<b>${fmtMoney(totalNetAll - totalIndirectAll)}</b>`
+  ];
+
+  const detailHeaders = ['الفرع', 'العميل', 'صافي مبيعات الفرع من العميل', 'نسبة الفرع من إجمالي مبيعات العميل', 'إجمالي الخصم غير المباشر للعميل (كل الفروع)', 'نسبة الخصم غير المباشر للعميل', 'الخصم غير المباشر المخصص لهذا الفرع'];
+  const detailRows = rowsData.map(r => [
+    r.branch, r.cust, fmtMoney(r.branchNet), fmtPct(r.branchShare),
+    fmtMoney(r.custIndirect), fmtPct(r.custIndirectPct),
+    r.branchAllocatedIndirect ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(r.branchAllocatedIndirect)}</span>` : fmtMoney(0)
+  ]);
+
+  el.innerHTML = `
+    <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <span>ملخص الخصم غير المباشر الموزّع على فروع الشركة</span>
+      <span class="no-print"><button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button></span>
+    </div>
+    <div class="hint" style="margin-bottom:10px;">مثال: لو عميل خصمه غير المباشر الكلي 100,000 جنيه ومبيعاته في كل فروع الشركة مليون جنيه (يعني نسبة خصمه 10%)، وفرع القاهرة باع لنفس العميل 800,000 جنيه، يبقى نصيب القاهرة من الخصم = 10% × 800,000 = 80,000 جنيه - مش نصيب متساوي بين الفروع، كل فرع ياخد على قد مبيعاته الفعلية لنفس العميل. الخصم المباشر مش محتاج توزيع لأنه أصلًا مسجل لكل فرع بالتفصيل في الفواتير - التوزيع هنا للخصم غير المباشر بس. الحساب بيراعي فلاتر السنة/الشهر فوق الصفحة (مش فلتر الفرع، عشان نسبة كل عميل تتحسب من مبيعاته الكاملة).</div>
+    <div class="table-wrap">${tableHTML(['الفرع', 'صافي المبيعات (بعد الخصم المباشر والمرتجع)', 'الخصم غير المباشر المخصص', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], summaryRows, summaryFooter)}</div>
+    <div class="table-title">تفصيل التوزيع لكل فرع/عميل (${fmt(rowsData.length)} صف)</div>
+    <div class="table-wrap">${tableHTML(detailHeaders, detailRows)}</div>
   `;
 }
 
