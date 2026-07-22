@@ -1691,6 +1691,11 @@ table.datatable details summary:hover { text-decoration: underline; }
     const allCb = panel.querySelector('.ms-all-cb');
     allCb.checked = selected.length === 0;
     const setLabel = () => updateMsBtn(key, btn, values.length);
+    // panel.id ثابت حتى لو العنصر اتبنى من جديد (زي تابات محلية بتتبني كل مرة renderAll) - بنستخدمه
+    // عشان نلاقي النسخة الجديدة من نفس البانل بعد renderAll() ونفتحها تاني، عشان القائمة تفضل ظاهرة
+    // للمستخدم وهو بيختار أكتر من قيمة من غير ما تقفل بعد كل اختيار.
+    const panelId = panel.id;
+    const reopenPanel = () => { if (panelId) { const p = document.getElementById(panelId); if (p) p.classList.add('open'); } };
     allCb.addEventListener('change', () => {
       state.filters[key] = [];
       panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => cb.checked = false);
@@ -1698,6 +1703,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       setLabel();
       refreshFilterKey(key);
       renderAll();
+      reopenPanel();
     });
     panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => {
       cb.addEventListener('change', () => {
@@ -1708,6 +1714,7 @@ table.datatable details summary:hover { text-decoration: underline; }
         setLabel();
         refreshFilterKey(key);
         renderAll();
+        reopenPanel();
       });
     });
     setLabel();
@@ -1969,6 +1976,177 @@ table.datatable details summary:hover { text-decoration: underline; }
     a.href = url;
     const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
     a.download = 'خصومات_العملاء_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // تصدير إكسيل لتاب "توزيع الخصم على الفروع" - شيت منفصل لكل عميل عليه خصم غير مباشر فعلي، فيه
+  // ملخص الفترة والخصم الكلي، وجدول توزيع الخصم على الفروع مع عدد مواقع/فروع العميل نفسه في كل فرع.
+  window.exportBranchIndirectExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    const inv = invoicesForBranchAllocation();
+    if (!inv.length) { alert('محتاج ترفع/تحمّل بيانات الفواتير الأول.'); return; }
+
+    const returnRows = returnsForBranchAllocation();
+    const retByCustNorm = new Map();
+    const retByBranchCust = new Map();
+    returnRows.forEach(r => {
+      const normKey = r.__عميل_مطابق;
+      retByCustNorm.set(normKey, (retByCustNorm.get(normKey) || 0) + (r['الإجمالي'] || 0));
+      const br = r['الفرع'] || 'غير محدد';
+      retByBranchCust.set(br + '||' + normKey, (retByBranchCust.get(br + '||' + normKey) || 0) + (r['الإجمالي'] || 0));
+    });
+    const indirectByCust = indirectDiscountByCustomerFiltered();
+
+    // إجمالي مبيعات كل عميل + الفترة الفعلية المغطاة (أقدم وأحدث فاتورة مطابقة)
+    const custTotal = new Map();
+    inv.forEach(i => {
+      const c = i['العميل'];
+      if (!c) return;
+      if (!custTotal.has(c)) custTotal.set(c, { gross: 0, direct: 0, minDate: null, maxDate: null });
+      const e = custTotal.get(c);
+      e.gross += i.__gross; e.direct += i.__discount;
+      if (i.__date) {
+        if (!e.minDate || i.__date < e.minDate) e.minDate = i.__date;
+        if (!e.maxDate || i.__date > e.maxDate) e.maxDate = i.__date;
+      }
+    });
+
+    // مبيعات كل فرع من كل عميل + عدد مواقع/فروع العميل المختلفة اللي بيخدمها هذا الفرع (من عمود فرع_العميل)
+    const branchCust = new Map();
+    inv.forEach(i => {
+      const br = i['الفرع'] || 'غير محدد';
+      const c = i['العميل'];
+      if (!c) return;
+      const key = br + '||' + c;
+      if (!branchCust.has(key)) branchCust.set(key, { gross: 0, direct: 0, sites: new Set() });
+      const e = branchCust.get(key);
+      e.gross += i.__gross; e.direct += i.__discount;
+      if (i['فرع_العميل']) e.sites.add(i['فرع_العميل']);
+    });
+
+    // تجميع بيانات كل عميل عليه خصم غير مباشر فعلي (نفس منطق renderBranchIndirect بالظبط)
+    const byCustomer = new Map();
+    branchCust.forEach((e, key) => {
+      const sep = key.indexOf('||');
+      const branch = key.slice(0, sep), cust = key.slice(sep + 2);
+      const custIndirect = indirectByCust.get(cust) || 0;
+      if (!custIndirect) return; // بس العملاء اللي عندهم خصم غير مباشر فعلي بياخدوا شيت
+      const normKey = SalesParser.normalizeCustomerKey(cust);
+      const branchRet = retByBranchCust.get(branch + '||' + normKey) || 0;
+      const branchNet = e.gross - e.direct - branchRet;
+
+      const ct = custTotal.get(cust) || { gross: 0, direct: 0, minDate: null, maxDate: null };
+      const custTotalRet = retByCustNorm.get(normKey) || 0;
+      const custTotalNet = ct.gross - ct.direct - custTotalRet;
+      const custIndirectPct = custTotalNet ? custIndirect / custTotalNet : 0;
+      const branchShare = custTotalNet ? branchNet / custTotalNet : 0;
+      const branchAllocated = custIndirectPct * branchNet;
+      if (!branchNet && !branchAllocated) return;
+
+      if (!byCustomer.has(cust)) {
+        byCustomer.set(cust, { custTotalNet, custIndirect, custIndirectPct, minDate: ct.minDate, maxDate: ct.maxDate, rows: [] });
+      }
+      byCustomer.get(cust).rows.push({ branch, branchNet, siteCount: e.sites.size, branchShare, branchAllocated });
+    });
+
+    if (!byCustomer.size) { alert('مفيش عملاء عليهم خصم غير مباشر مطابق في الفترة/الفلاتر الحالية.'); return; }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
+    const numFmt = '#,##0;[Red]-#,##0';
+
+    let logoImgId = null;
+    try {
+      const logoEl = document.querySelector('img.logo');
+      const src = logoEl ? logoEl.getAttribute('src') : '';
+      if (src && src.indexOf('base64,') > -1) {
+        logoImgId = wb.addImage({ base64: src.split('base64,')[1], extension: 'png' });
+      }
+    } catch (e) { /* لو فشل تحميل الشعار، نكمل من غيره */ }
+
+    const usedNames = new Set();
+    function safeSheetName(name) {
+      let s = String(name).replace(/[\\/?*[\]:]/g, ' ').trim().slice(0, 31) || 'عميل';
+      let base = s, n = 2;
+      while (usedNames.has(s)) { s = (base.slice(0, 28) + ' ' + n).slice(0, 31); n++; }
+      usedNames.add(s);
+      return s;
+    }
+    function fmtDate(d) { return d ? (String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear()) : '-'; }
+
+    // أكبر عميل (بقيمة الخصم غير المباشر) الأول
+    const customersSorted = Array.from(byCustomer.entries()).sort((a, b) => b[1].custIndirect - a[1].custIndirect);
+
+    customersSorted.forEach(([cust, data]) => {
+      const ws = wb.addWorksheet(safeSheetName(cust), { views: [{ rightToLeft: true }] });
+      ws.columns = [{ width: 26 }, { width: 14 }, { width: 18 }, { width: 16 }, { width: 20 }];
+
+      if (logoImgId) ws.addImage(logoImgId, { tl: { col: 3.3, row: 0.15 }, ext: { width: 60, height: 60 } });
+      ws.mergeCells('A1:C1');
+      const titleCell = ws.getCell('A1');
+      titleCell.value = cust;
+      titleCell.font = { bold: true, size: 14, color: { argb: INK } };
+      titleCell.alignment = { horizontal: 'right', vertical: 'middle' };
+      ws.getRow(1).height = 26;
+
+      const infoRows = [
+        ['مبيعات خلال الفترة من والي', fmtDate(data.minDate) + '  -  ' + fmtDate(data.maxDate)],
+        ['إجمالي المبيعات (بعد الخصم المباشر والمرتجع)', data.custTotalNet],
+        ['نسبة الخصم غير المباشر', data.custIndirectPct],
+        ['بمبلغ', data.custIndirect]
+      ];
+      infoRows.forEach(([label, val]) => {
+        const r = ws.addRow([label, val]);
+        r.getCell(1).font = { bold: true, color: { argb: INK } };
+        r.getCell(1).alignment = { horizontal: 'right' };
+        if (typeof val === 'number') {
+          r.getCell(2).numFmt = (label.indexOf('نسبة') > -1) ? '0.0%' : numFmt;
+          r.getCell(2).font = { bold: true };
+        }
+      });
+      ws.addRow([]);
+
+      const hdrRow = ws.addRow(['الفرع', 'عدد فروع العميل', 'المبيعات', 'نسبة من المبيعات', 'المبلغ المخصص من الخصم غير المباشر']);
+      hdrRow.eachCell(c => {
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        c.font = { bold: true, color: { argb: SAND } };
+        c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      });
+      hdrRow.height = 30;
+
+      const sortedRows = data.rows.slice().sort((a, b) => b.branchNet - a.branchNet);
+      let totSites = 0, totNet = 0, totAlloc = 0;
+      sortedRows.forEach((r, idx) => {
+        totSites += r.siteCount; totNet += r.branchNet; totAlloc += r.branchAllocated;
+        const row = ws.addRow([r.branch, r.siteCount, r.branchNet, r.branchShare, r.branchAllocated]);
+        if (idx % 2 === 1) row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+        row.getCell(3).numFmt = numFmt;
+        row.getCell(4).numFmt = '0.0%';
+        row.getCell(5).numFmt = numFmt;
+        row.getCell(1).alignment = { horizontal: 'right' };
+      });
+      const totRow = ws.addRow(['الإجمالي', totSites, totNet, data.custTotalNet ? totNet / data.custTotalNet : 0, totAlloc]);
+      totRow.eachCell(c => {
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        c.font = { bold: true, color: { argb: INK } };
+        c.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
+      totRow.getCell(3).numFmt = numFmt;
+      totRow.getCell(4).numFmt = '0.0%';
+      totRow.getCell(5).numFmt = numFmt;
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const now = new Date();
+    a.href = url;
+    const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    a.download = 'توزيع_الخصم_على_الفروع_' + stamp + '.xlsx';
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   };
@@ -3178,7 +3356,10 @@ function renderBranchIndirect() {
   el.innerHTML = `
     <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
       <span>ملخص الخصم غير المباشر الموزّع على فروع الشركة</span>
-      <span class="no-print"><button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button></span>
+      <span class="no-print" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button>
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportBranchIndirectExcel()">📊 تصدير Excel (شيت لكل عميل)</button>
+      </span>
     </div>
     <div class="no-print" style="margin-bottom:4px;">${filterBarHtml}</div>
     <div class="hint" style="margin-bottom:10px;">مثال: لو عميل خصمه غير المباشر الكلي 100,000 جنيه ومبيعاته في كل فروع الشركة مليون جنيه (يعني نسبة خصمه 10%)، وفرع القاهرة باع لنفس العميل 800,000 جنيه، يبقى نصيب القاهرة من الخصم = 10% × 800,000 = 80,000 جنيه - مش نصيب متساوي بين الفروع، كل فرع ياخد على قد مبيعاته الفعلية لنفس العميل. الخصم المباشر مش محتاج توزيع لأنه أصلًا مسجل لكل فرع بالتفصيل في الفواتير - التوزيع هنا للخصم غير المباشر بس. فلاتر السنة/الشهر/النشاط هنا بتتحكم في نفس فلتر الأعلى العام (متزامنة معاه)، أما "عرض الفروع" فهي بس بتتحكم في إيه اللي يظهر لك في الجدول من غير ما تأثر على حساب النسبة، اللي فاضل دايمًا شامل كل الفروع عشان النسبة تفضل صح.</div>
