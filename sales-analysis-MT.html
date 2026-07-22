@@ -9,6 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
 :root {
   --caramel: #C55B48;
@@ -190,6 +191,9 @@ table.datatable details summary::-webkit-details-marker { display: none; }
 table.datatable details summary::marker { display: none; content: ""; }
 table.datatable details summary:hover { text-decoration: underline; }
 
+/* توقيع مدير مبيعات مودرن تريد / مدير عام المبيعات - يظهر بس في تقرير طباعة PDF لتاب "خصومات العملاء" */
+.print-signature { display: none; }
+
 #printBtn {
   position: fixed; bottom: 24px; left: 24px; z-index: 50;
 }
@@ -244,6 +248,17 @@ table.datatable details summary:hover { text-decoration: underline; }
   .kpi-grid { page-break-inside: avoid; grid-template-columns: repeat(4, 1fr) !important; }
   .app-header { page-break-after: avoid; }
   .table-title { page-break-after: avoid; }
+
+  .print-signature {
+    display: flex !important;
+    justify-content: space-between;
+    gap: 40px;
+    margin-top: 46px;
+    padding-top: 6px;
+    page-break-inside: avoid;
+  }
+  .print-signature .sig-block { flex: 1; text-align: center; font-size: 12.5px; font-weight: 700; color: var(--ink); }
+  .print-signature .sig-line { margin-top: 40px; border-top: 1.2px solid var(--ink); padding-top: 5px; font-weight: 400; font-size: 11px; color: var(--ink-soft); }
 }
 
 </style>
@@ -1805,6 +1820,113 @@ table.datatable details summary:hover { text-decoration: underline; }
     setTimeout(cleanup, 30000); // احتياطي بس (30 ثانية) لو المتصفح مادعمش afterprint - مايشيلش الكلاس قبل ما نافذة الطباعة تتقفل
   };
 
+  // تصدير Excel ملون بشعار الشركة وتوقيعات (مدير مبيعات مودرن تريد / مدير عام المبيعات) لتاب "خصومات العملاء"
+  window.exportCustomerDiscountsExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    const rows = state.__customerDiscountsRows;
+    const foot = state.__customerDiscountsFooter;
+    if (!rows || !rows.length) { alert('مفيش بيانات لتصديرها - اعرض تاب "خصومات العملاء" الأول.'); return; }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const ws = wb.addWorksheet('خصومات العملاء', { views: [{ rightToLeft: true }] });
+
+    const RED = 'FFB23B3B', INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2', GOOD = 'FF2F6B45';
+
+    // الشعار (من نفس صورة الهيدر في الصفحة)
+    try {
+      const logoEl = document.querySelector('img.logo');
+      const src = logoEl ? logoEl.getAttribute('src') : '';
+      if (src && src.indexOf('base64,') > -1) {
+        const base64 = src.split('base64,')[1];
+        const imgId = wb.addImage({ base64, extension: 'png' });
+        ws.addImage(imgId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 64, height: 64 } });
+      }
+    } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
+
+    ws.mergeCells('B1:I2');
+    const titleCell = ws.getCell('B1');
+    titleCell.value = 'نظام تحليل مبيعات تمور الطحان - تقرير خصومات العملاء';
+    titleCell.font = { bold: true, size: 15, color: { argb: INK } };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    ws.mergeCells('B3:I3');
+    const dateCell = ws.getCell('B3');
+    const now = new Date();
+    dateCell.value = 'تاريخ التصدير: ' + String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + now.getFullYear();
+    dateCell.font = { size: 11, color: { argb: 'FF6B5647' } };
+    dateCell.alignment = { horizontal: 'center' };
+
+    ws.addRow([]);
+
+    const headers = ['العميل', 'عدد الفروع', 'المبيعات بعد خصم المرتجع والضريبة', 'الخصم المباشر', 'نسبة الخصم المباشر', 'الخصم غير المباشر', 'نسبة الخصم غير المباشر', 'إجمالي الخصومات', 'الصافي بعد كل الخصومات'];
+    const headerRow = ws.addRow(headers);
+    headerRow.eachCell(cell => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+      cell.font = { bold: true, color: { argb: SAND } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+    });
+    headerRow.height = 34;
+
+    rows.forEach((r, idx) => {
+      const row = ws.addRow([
+        r.cust, r.sitesCount, r.salesAfterReturnTax,
+        r.discX ? -r.discX : 0, r.discPct,
+        r.indirectX ? -r.indirectX : 0, r.indirectPct,
+        r.totalDiscounts ? -r.totalDiscounts : 0, r.finalNet
+      ]);
+      if (idx % 2 === 1) {
+        row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      }
+      [3, 4, 6, 8, 9].forEach(c => { row.getCell(c).numFmt = '#,##0;[Red]-#,##0'; });
+      [5, 7].forEach(c => { row.getCell(c).numFmt = '0.0%'; });
+      row.getCell(1).alignment = { horizontal: 'right' };
+      row.getCell(9).font = { bold: true };
+    });
+
+    const footerRow = ws.addRow([
+      'الإجمالي (كل العملاء)', foot.totalSites, foot.totalSales,
+      foot.totalDirect ? -foot.totalDirect : 0, foot.totalDirectPct,
+      foot.totalIndirect ? -foot.totalIndirect : 0, foot.totalIndirectPct,
+      foot.totalAllDisc ? -foot.totalAllDisc : 0, foot.totalFinalNet
+    ]);
+    footerRow.eachCell(cell => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+      cell.font = { bold: true, color: { argb: INK } };
+      cell.border = { top: { style: 'medium', color: { argb: INK } } };
+    });
+    [3, 4, 6, 8, 9].forEach(c => { footerRow.getCell(c).numFmt = '#,##0;[Red]-#,##0'; });
+    [5, 7].forEach(c => { footerRow.getCell(c).numFmt = '0.0%'; });
+
+    ws.getColumn(1).width = 40;
+    ws.getColumn(2).width = 12;
+    for (let c = 3; c <= 9; c++) ws.getColumn(c).width = 20;
+
+    // صف الصافي بالأخضر لو موجب
+    const netCell = footerRow.getCell(9);
+    netCell.font = { bold: true, color: { argb: foot.totalFinalNet >= 0 ? GOOD : RED } };
+
+    // توقيعات
+    ws.addRow([]); ws.addRow([]);
+    const sigLabelRow = ws.addRow(['', '', '', '', 'مدير مبيعات مودرن تريد', '', '', 'مدير عام المبيعات', '']);
+    sigLabelRow.eachCell(cell => { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; });
+    ws.addRow([]);
+    const sigLineRow = ws.addRow(['', '', '', '', '____________________', '', '', '____________________', '']);
+    sigLineRow.eachCell(cell => { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    a.download = 'خصومات_العملاء_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   /* ---------------- Chart helper ---------------- */
   function makeChart(canvasId, config) {
     const canvas = document.getElementById(canvasId);
@@ -2861,10 +2983,28 @@ function renderCustomerDiscounts() {
     `<b>${fmtMoney(totalFinalNet)}</b>`
   ];
 
+  // نخزّن بيانات الجدول (تفصيلي + إجمالي) عشان زرار تصدير Excel يستخدمها من غير ما يعيد الحساب من الأول
+  state.__customerDiscountsRows = rowsData;
+  state.__customerDiscountsFooter = {
+    totalSites, totalSales, totalDirect, totalIndirect, totalAllDisc, totalFinalNet,
+    totalDirectPct: totalSales ? totalDirect / totalSales : 0,
+    totalIndirectPct: totalNetAfterDirect ? totalIndirect / totalNetAfterDirect : 0
+  };
+
   el.innerHTML = `
-    <div class="table-title">خصومات العملاء (${fmt(rowsData.length)} عميل) - الخصم المباشر وغير المباشر والصافي النهائي</div>
+    <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <span>خصومات العملاء (${fmt(rowsData.length)} عميل) - الخصم المباشر وغير المباشر والصافي النهائي</span>
+      <span class="no-print" style="display:flex; gap:8px;">
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button>
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportCustomerDiscountsExcel()">📊 تصدير Excel</button>
+      </span>
+    </div>
     <div class="hint" style="margin-bottom:10px;">"المبيعات بعد خصم المرتجع والضريبة" = صافي مبيعات العميل بعد خصم المرتجعات فقط (الضريبة مستبعدة أصلًا من الحساب من الأساس). "نسبة الخصم غير المباشر" محسوبة من الصافي بعد خصم المرتجع والخصم المباشر. "الخصم غير المباشر" هنا بيراعي فلاتر السنة/الشهر فوق الصفحة، وبيوزّع القيود اللي بتغطي أكتر من فترة (زي شرحنا في تاب "الخصم غير المباشر") على الفترة الصح.</div>
     <div class="table-wrap">${tableHTML(headers, rowsHtml, footer)}</div>
+    <div class="print-signature">
+      <div class="sig-block">مدير مبيعات مودرن تريد<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
+      <div class="sig-block">مدير عام المبيعات<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
+    </div>
   `;
 }
 
