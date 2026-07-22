@@ -854,7 +854,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     yoyUpToMonth: null,  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
     indirectNetScope: 'partial',  // 'partial' = الصافي بس في الفترات اللي فيها خصم غير مباشر مسجل، 'full' = الصافي الكامل لكل الفترات
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
-    custHiddenCols: new Set()  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
+    custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
+    branchIndirectSelectedBranches: []  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -1648,22 +1649,37 @@ table.datatable details summary:hover { text-decoration: underline; }
   }
 
   /* ---------------- Filters (multi-select checkboxes) ---------------- */
+  // القيم المتاحة لكل مفتاح فلتر - دالة مستقلة عشان تتعاد بسهولة من أي مكان (الشريط العلوي أو أي تاب
+  // عنده نسخة محلية من نفس الفلتر، زي تاب "توزيع الخصم على الفروع").
+  function computeFilterValues(key) {
+    switch (key) {
+      case 'activity': return uniq(state.invoices.map(i => i.__activity));
+      case 'branch': return uniq(state.invoices.map(i => i['الفرع']));
+      case 'year': return uniq(state.invoices.map(i => i.__year)).sort((a, b) => a - b);
+      case 'month': return uniq(state.invoices.map(i => i.__month)).sort((a, b) => a - b);
+      case 'rep': return uniq(state.invoices.map(i => i['المندوب']));
+      case 'item': return uniq(state.itemRows.map(r => r.item)).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+      default: return [];
+    }
+  }
   function populateFilters() {
-    const valuesByKey = {
-      activity: uniq(state.invoices.map(i => i.__activity)),
-      branch: uniq(state.invoices.map(i => i['الفرع'])),
-      year: uniq(state.invoices.map(i => i.__year)).sort((a, b) => a - b),
-      month: uniq(state.invoices.map(i => i.__month)).sort((a, b) => a - b),
-      rep: uniq(state.invoices.map(i => i['المندوب'])),
-      item: uniq(state.itemRows.map(r => r.item)).sort((a, b) => String(a).localeCompare(String(b), 'ar'))
-    };
-    Object.keys(valuesByKey).forEach(key => buildMultiSelect(key, valuesByKey[key], FILTER_VALUE_LABEL[key]));
+    Object.keys(FILTER_LABELS).forEach(key => refreshFilterKey(key));
   }
   function uniq(arr) { return Array.from(new Set(arr.filter(x => x !== null && x !== undefined && x !== ''))); }
 
-  function buildMultiSelect(key, values, labelFn) {
-    const panel = document.getElementById('msPanel-' + key);
-    const btn = document.getElementById('msBtn-' + key);
+  // اللواحق (suffixes) اللي فيها نسخة من دروب داون فلتر معين، غير الشريط العلوي (اللي بدون لاحقة):
+  // '-bi' = دروب داون محلي جوه تاب "توزيع الخصم على الفروع". أي تغيير من أي نسخة بيحدّث state.filters
+  // المشترك وبعدين بيعيد بناء كل النسخ التانية عشان تفضل متزامنة مع بعض.
+  const FILTER_DROPDOWN_SUFFIXES = ['', '-bi'];
+  function refreshFilterKey(key) {
+    const values = computeFilterValues(key);
+    FILTER_DROPDOWN_SUFFIXES.forEach(suf => {
+      wireMultiSelect(key, document.getElementById('msBtn-' + key + suf), document.getElementById('msPanel-' + key + suf), values, FILTER_VALUE_LABEL[key]);
+    });
+  }
+  // بناء/تفعيل دروب داون فلتر checkbox عام (مشترك بين الشريط العلوي وأي نسخة تانية) - بيقرأ ويكتب
+  // مباشرة في state.filters[key]، وأي تغيير بيعيد مزامنة كل النسخ الأخرى عن طريق refreshFilterKey.
+  function wireMultiSelect(key, btn, panel, values, labelFn) {
     if (!panel || !btn) return;
     const toLabel = labelFn || (v => v);
     const selected = state.filters[key];
@@ -1674,11 +1690,13 @@ table.datatable details summary:hover { text-decoration: underline; }
 
     const allCb = panel.querySelector('.ms-all-cb');
     allCb.checked = selected.length === 0;
+    const setLabel = () => updateMsBtn(key, btn, values.length);
     allCb.addEventListener('change', () => {
       state.filters[key] = [];
       panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => cb.checked = false);
       allCb.checked = true;
-      updateMsBtn(key, values.length);
+      setLabel();
+      refreshFilterKey(key);
       renderAll();
     });
     panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => {
@@ -1687,15 +1705,15 @@ table.datatable details summary:hover { text-decoration: underline; }
         if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
         state.filters[key] = Array.from(sel);
         allCb.checked = state.filters[key].length === 0;
-        updateMsBtn(key, values.length);
+        setLabel();
+        refreshFilterKey(key);
         renderAll();
       });
     });
-    updateMsBtn(key, values.length);
+    setLabel();
   }
 
-  function updateMsBtn(key, total) {
-    const btn = document.getElementById('msBtn-' + key);
+  function updateMsBtn(key, btn, total) {
     if (!btn) return;
     const sel = state.filters[key];
     let label;
@@ -1704,15 +1722,22 @@ table.datatable details summary:hover { text-decoration: underline; }
     else label = FILTER_LABELS[key] + ': ' + sel.length + ' محدد من ' + total;
     btn.textContent = label + ' ▾';
   }
-
-  document.querySelectorAll('.ms-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const panel = btn.nextElementSibling;
-      document.querySelectorAll('.ms-panel.open').forEach(p => { if (p !== panel) p.classList.remove('open'); });
-      panel.classList.toggle('open');
+  // فتح/قفل أي دروب داون فلتر (.ms-btn/.ms-panel) اتضاف بعد التحميل الأول (زي نسخ التابات المحلية) -
+  // بتتنادى بعد إنشاء الـ HTML بتاعها كل مرة لأن العناصر بتتبني من جديد.
+  function wireMsToggle(container) {
+    (container || document).querySelectorAll('.ms-btn').forEach(btn => {
+      if (btn.__wired) return;
+      btn.__wired = true;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const panel = btn.nextElementSibling;
+        document.querySelectorAll('.ms-panel.open').forEach(p => { if (p !== panel) p.classList.remove('open'); });
+        panel.classList.toggle('open');
+      });
     });
-  });
+  }
+
+  wireMsToggle(document);
   document.addEventListener('click', (e) => {
     document.querySelectorAll('.ms-panel.open').forEach(p => {
       if (!p.contains(e.target)) p.classList.remove('open');
@@ -3104,7 +3129,13 @@ function renderBranchIndirect() {
     const s = branchSummary.get(r.branch);
     s.net += r.branchNet; s.indirect += r.branchAllocatedIndirect;
   });
-  const branches = Array.from(branchSummary.keys()).sort((a, b) => a.localeCompare(b, 'ar'));
+  const allBranches = Array.from(branchSummary.keys()).sort((a, b) => a.localeCompare(b, 'ar'));
+  // اختيار الفروع للعرض بس (دروب داون محلي) - ما بيأثرش على الحساب خالص، الحساب فوق دايمًا شامل كل
+  // الفروع عشان نسبة كل عميل تفضل صح. لو مفيش اختيار ([]) يبقى الكل ظاهر.
+  const selBranches = state.branchIndirectSelectedBranches;
+  const branches = selBranches.length === 0 ? allBranches : allBranches.filter(b => selBranches.includes(b));
+  const visibleRowsData = selBranches.length === 0 ? rowsData : rowsData.filter(r => selBranches.includes(r.branch));
+
   const summaryRows = branches.map(b => {
     const s = branchSummary.get(b);
     const pct = s.net ? s.indirect / s.net : 0;
@@ -3117,28 +3148,84 @@ function renderBranchIndirect() {
   const totalNetAll = branches.reduce((s, b) => s + branchSummary.get(b).net, 0);
   const totalIndirectAll = branches.reduce((s, b) => s + branchSummary.get(b).indirect, 0);
   const summaryFooter = [
-    'الإجمالي (كل الفروع)', fmtMoney(totalNetAll),
+    branches.length === allBranches.length ? 'الإجمالي (كل الفروع)' : `الإجمالي (${fmt(branches.length)} فرع مختار من ${fmt(allBranches.length)})`,
+    fmtMoney(totalNetAll),
     totalIndirectAll ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(totalIndirectAll)}</span>` : fmtMoney(0),
     fmtPct(totalNetAll ? totalIndirectAll / totalNetAll : 0), `<b>${fmtMoney(totalNetAll - totalIndirectAll)}</b>`
   ];
 
   const detailHeaders = ['الفرع', 'العميل', 'صافي مبيعات الفرع من العميل', 'نسبة الفرع من إجمالي مبيعات العميل', 'إجمالي الخصم غير المباشر للعميل (كل الفروع)', 'نسبة الخصم غير المباشر للعميل', 'الخصم غير المباشر المخصص لهذا الفرع'];
-  const detailRows = rowsData.map(r => [
+  const detailRows = visibleRowsData.map(r => [
     r.branch, r.cust, fmtMoney(r.branchNet), fmtPct(r.branchShare),
     fmtMoney(r.custIndirect), fmtPct(r.custIndirectPct),
     r.branchAllocatedIndirect ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(r.branchAllocatedIndirect)}</span>` : fmtMoney(0)
   ]);
+
+  const filterBarHtml = `
+    <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;"><button type="button" class="ms-btn" id="msBtn-year-bi">السنة: الكل ▾</button><div class="ms-panel" id="msPanel-year-bi"></div></div>
+    <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;"><button type="button" class="ms-btn" id="msBtn-month-bi">الشهر: الكل ▾</button><div class="ms-panel" id="msPanel-month-bi"></div></div>
+    <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;"><button type="button" class="ms-btn" id="msBtn-activity-bi">النشاط: الكل ▾</button><div class="ms-panel" id="msPanel-activity-bi"></div></div>
+    <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;">
+      <button type="button" class="ms-btn" id="branchIndSelBtn">🏢 عرض الفروع: الكل ▾</button>
+      <div class="ms-panel" id="branchIndSelPanel">
+        <label class="ms-item ms-all"><input type="checkbox" class="bi-branch-all"><span>الكل</span></label>
+        <div class="ms-sep"></div>
+        ${allBranches.map(b => `<label class="ms-item"><input type="checkbox" class="bi-branch-cb" value="${b}" ${selBranches.includes(b) ? 'checked' : ''}><span>${b}</span></label>`).join('')}
+      </div>
+    </div>
+  `;
 
   el.innerHTML = `
     <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
       <span>ملخص الخصم غير المباشر الموزّع على فروع الشركة</span>
       <span class="no-print"><button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button></span>
     </div>
-    <div class="hint" style="margin-bottom:10px;">مثال: لو عميل خصمه غير المباشر الكلي 100,000 جنيه ومبيعاته في كل فروع الشركة مليون جنيه (يعني نسبة خصمه 10%)، وفرع القاهرة باع لنفس العميل 800,000 جنيه، يبقى نصيب القاهرة من الخصم = 10% × 800,000 = 80,000 جنيه - مش نصيب متساوي بين الفروع، كل فرع ياخد على قد مبيعاته الفعلية لنفس العميل. الخصم المباشر مش محتاج توزيع لأنه أصلًا مسجل لكل فرع بالتفصيل في الفواتير - التوزيع هنا للخصم غير المباشر بس. الحساب بيراعي فلاتر السنة/الشهر فوق الصفحة (مش فلتر الفرع، عشان نسبة كل عميل تتحسب من مبيعاته الكاملة).</div>
+    <div class="no-print" style="margin-bottom:4px;">${filterBarHtml}</div>
+    <div class="hint" style="margin-bottom:10px;">مثال: لو عميل خصمه غير المباشر الكلي 100,000 جنيه ومبيعاته في كل فروع الشركة مليون جنيه (يعني نسبة خصمه 10%)، وفرع القاهرة باع لنفس العميل 800,000 جنيه، يبقى نصيب القاهرة من الخصم = 10% × 800,000 = 80,000 جنيه - مش نصيب متساوي بين الفروع، كل فرع ياخد على قد مبيعاته الفعلية لنفس العميل. الخصم المباشر مش محتاج توزيع لأنه أصلًا مسجل لكل فرع بالتفصيل في الفواتير - التوزيع هنا للخصم غير المباشر بس. فلاتر السنة/الشهر/النشاط هنا بتتحكم في نفس فلتر الأعلى العام (متزامنة معاه)، أما "عرض الفروع" فهي بس بتتحكم في إيه اللي يظهر لك في الجدول من غير ما تأثر على حساب النسبة، اللي فاضل دايمًا شامل كل الفروع عشان النسبة تفضل صح.</div>
     <div class="table-wrap">${tableHTML(['الفرع', 'صافي المبيعات (بعد الخصم المباشر والمرتجع)', 'الخصم غير المباشر المخصص', 'نسبته من الصافي', 'الصافي بعد الخصم غير المباشر'], summaryRows, summaryFooter)}</div>
-    <div class="table-title">تفصيل التوزيع لكل فرع/عميل (${fmt(rowsData.length)} صف)</div>
+    <div class="table-title">تفصيل التوزيع لكل فرع/عميل (${fmt(visibleRowsData.length)} صف)</div>
     <div class="table-wrap">${tableHTML(detailHeaders, detailRows)}</div>
   `;
+
+  // تفعيل دروب داونات السنة/الشهر/النشاط المحلية (مشتركة مع فلتر الأعلى)
+  wireMultiSelect('year', el.querySelector('#msBtn-year-bi'), el.querySelector('#msPanel-year-bi'), computeFilterValues('year'), FILTER_VALUE_LABEL['year']);
+  wireMultiSelect('month', el.querySelector('#msBtn-month-bi'), el.querySelector('#msPanel-month-bi'), computeFilterValues('month'), FILTER_VALUE_LABEL['month']);
+  wireMultiSelect('activity', el.querySelector('#msBtn-activity-bi'), el.querySelector('#msPanel-activity-bi'), computeFilterValues('activity'), FILTER_VALUE_LABEL['activity']);
+
+  // تفعيل دروب داون "عرض الفروع" (محلي بحت، مش مشترك مع أي فلتر تاني)
+  const branchSelBtn = el.querySelector('#branchIndSelBtn');
+  const branchSelPanel = el.querySelector('#branchIndSelPanel');
+  if (branchSelBtn && branchSelPanel) {
+    const allCb = branchSelPanel.querySelector('.bi-branch-all');
+    allCb.checked = selBranches.length === 0;
+    const setSelLabel = () => {
+      const sel = state.branchIndirectSelectedBranches;
+      branchSelBtn.textContent = (sel.length === 0 ? '🏢 عرض الفروع: الكل' : `🏢 عرض الفروع: ${fmt(sel.length)} محدد من ${fmt(allBranches.length)}`) + ' ▾';
+    };
+    setSelLabel();
+    allCb.addEventListener('change', () => {
+      state.branchIndirectSelectedBranches = [];
+      branchSelPanel.querySelectorAll('.bi-branch-cb').forEach(cb => cb.checked = false);
+      allCb.checked = true;
+      setSelLabel();
+      renderBranchIndirect();
+      const reopened = document.getElementById('branchIndSelPanel');
+      if (reopened) reopened.classList.add('open');
+    });
+    branchSelPanel.querySelectorAll('.bi-branch-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const sel = new Set(state.branchIndirectSelectedBranches);
+        if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
+        state.branchIndirectSelectedBranches = Array.from(sel);
+        allCb.checked = state.branchIndirectSelectedBranches.length === 0;
+        setSelLabel();
+        renderBranchIndirect();
+        const reopened = document.getElementById('branchIndSelPanel');
+        if (reopened) reopened.classList.add('open');
+      });
+    });
+  }
+  wireMsToggle(el);
 }
 
 /* ---------------- الخصم غير المباشر: الصافي قبل/بعد لكل عميل/شهر ---------------- */
