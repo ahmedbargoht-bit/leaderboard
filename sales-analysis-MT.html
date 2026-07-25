@@ -1469,14 +1469,37 @@ table.datatable details summary:hover { text-decoration: underline; }
 
   /* ---------------- الخصم غير المباشر (كشف حساب العملاء) ---------------- */
   // لو نص "ملاحظة" القيد فيه ذكر لفترات مختلفة، نوزّع مبلغ القيد بدل ما نحطه كله على تاريخ القيد الرسمي في الملف:
+  // 0) قبل أي حاجة، بنشيل من النص أي تاريخ إداري كامل (يوم-شهر-سنة، زي "1-10-2025" أو "24/1/2025") لأنه غالباً
+  //    مجرد تاريخ عمل الإشعار نفسه مش فترة استحقاق فعلية - عشان منلخبطوش مع سنين/شهور حقيقية مذكورة في النص.
   // 1) الأولوية لصيغة دقيقة "شهر <رقم>/<سنة>" (زي "شهر 12/2025 وشهر 1/2026") - بتوزع على الشهر/السنة بالظبط.
-  // 2) لو مفيش صيغة شهر واضحة، بندور على أي سنين لوحدها مذكورة في النص (زي "...عقد 2026 وافتتاحات خلال 2025")
-  //    وبنوزع على السنين دي (بنفس شهر تاريخ القيد الرسمي، لأن الشهر مش مهم هنا - المهم السنة الصح).
-  // 3) غير كده (مفيش ولا شهر ولا سنة تانية مذكورة) بيفضل ياخد تاريخ القيد الرسمي زي ما هو (مفيش تقسيم).
+  //    لو النص فيه صيغة مدى صريحة ("من شهر X حتى شهر Y") بين أول وآخر شهر مذكورين، بنوزع على *كل* الشهور
+  //    اللي بينهم بالتساوي (مش بس أول وآخر شهر) - زي "من شهر 6/2025 حتى شهر 12/2025" اللي لازم تغطي 7 شهور.
+  // 2) لو مفيش صيغة شهر واضحة، بندور على أي سنين لوحدها مذكورة في النص (بعد استبعاد التواريخ الإدارية في خطوة 0)
+  //    زي "...عقد 2026 وافتتاحات خلال 2025":
+  //    - لو اتنين سنين مختلفة أو أكتر: بنوزع المبلغ عليهم بالتساوي.
+  //    - لو سنة واحدة بس مذكورة (وهي مختلفة عن تاريخ القيد الرسمي، زي "...لعام 2024"): بياخد القيد كل مبلغه
+  //      على السنة دي بالكامل (مش هيفضل على تاريخ القيد الرسمي).
+  // 3) غير كده (مفيش ولا شهر ولا سنة مذكورة في النص) بيفضل ياخد تاريخ القيد الرسمي زي ما هو (مفيش تقسيم).
   const INDIRECT_NOTE_MONTH_RE = /شهر\s*(\d{1,2})\s*\/\s*(\d{4})/g;
   const INDIRECT_NOTE_YEAR_RE = /\b(20\d{2})\b/g;
+  const INDIRECT_NOTE_FULLDATE_RE = /\b\d{1,2}[-\/]\d{1,2}[-\/](20\d{2})\b/g;
+  const INDIRECT_RANGE_KEYWORDS_RE = /من[\s\S]{0,40}?(حتى|الى|إلى|لحد)/;
+  function monthKeySeq(fromYear, fromMonth, toYear, toMonth) {
+    // يرجّع كل الشهور (year, month, monthKey) من (fromYear/fromMonth) لحد (toYear/toMonth) شاملة الطرفين، بالترتيب الزمني
+    let a = fromYear * 12 + (fromMonth - 1);
+    let b = toYear * 12 + (toMonth - 1);
+    if (a > b) { const t = a; a = b; b = t; }
+    const out = [];
+    for (let k = a; k <= b; k++) {
+      const yr = Math.floor(k / 12), mo = (k % 12) + 1;
+      out.push({ year: yr, month: mo, monthKey: yr + '-' + String(mo).padStart(2, '0') });
+    }
+    return out;
+  }
   function computeIndirectSplitPeriods(d) {
-    const note = (d['ملاحظة'] || '').toString();
+    const noteRaw = (d['ملاحظة'] || '').toString();
+    // خطوة 0: شيل أي تاريخ إداري كامل (يوم-شهر-سنة) قبل ما ندور على شهور/سنين حقيقية
+    const note = noteRaw.replace(INDIRECT_NOTE_FULLDATE_RE, ' ');
 
     const monthFound = [];
     let m;
@@ -1488,8 +1511,14 @@ table.datatable details summary:hover { text-decoration: underline; }
     const seenM = new Set();
     const uniqueMonthPeriods = monthFound.filter(p => (seenM.has(p.monthKey) ? false : (seenM.add(p.monthKey), true)));
     if (uniqueMonthPeriods.length >= 2) {
-      const share = (d['المبلغ'] || 0) / uniqueMonthPeriods.length;
-      d.__splitPeriods = uniqueMonthPeriods.map(p => ({ year: p.year, month: p.month, monthKey: p.monthKey, amount: share }));
+      let periods = uniqueMonthPeriods;
+      // لو النص فيه صيغة مدى صريحة ("من...حتى/الى") ومعندناش غير أول وآخر شهر مذكورين، نوسّع لكل الشهور اللي بينهم
+      if (uniqueMonthPeriods.length === 2 && INDIRECT_RANGE_KEYWORDS_RE.test(note)) {
+        const p0 = uniqueMonthPeriods[0], p1 = uniqueMonthPeriods[1];
+        periods = monthKeySeq(p0.year, p0.month, p1.year, p1.month);
+      }
+      const share = (d['المبلغ'] || 0) / periods.length;
+      d.__splitPeriods = periods.map(p => ({ year: p.year, month: p.month, monthKey: p.monthKey, amount: share }));
       d.__splitFromNote = true;
       return;
     }
@@ -1503,6 +1532,14 @@ table.datatable details summary:hover { text-decoration: underline; }
       const fallbackMonth = d.__month || 1;
       const share = (d['المبلغ'] || 0) / uniqueYears.length;
       d.__splitPeriods = uniqueYears.map(yr => ({ year: yr, month: fallbackMonth, monthKey: yr + '-' + String(fallbackMonth).padStart(2, '0'), amount: share }));
+      d.__splitFromNote = true;
+      return;
+    }
+    if (uniqueYears.length === 1 && uniqueYears[0] !== d.__year) {
+      // سنة واحدة بس اتذكرت صراحة في الملاحظة، ومختلفة عن سنة تاريخ القيد الرسمي - ياخدها كاملة
+      const fallbackMonth = d.__month || 1;
+      const yr = uniqueYears[0];
+      d.__splitPeriods = [{ year: yr, month: fallbackMonth, monthKey: yr + '-' + String(fallbackMonth).padStart(2, '0'), amount: d['المبلغ'] || 0 }];
       d.__splitFromNote = true;
       return;
     }
