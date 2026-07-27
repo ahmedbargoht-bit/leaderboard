@@ -1549,6 +1549,7 @@ table.datatable details summary:hover { text-decoration: underline; }
   }
   function tagIndirectDiscount(d, fileName) {
     d.__fileName = fileName;
+    d.__activity = guessActivity(fileName || ''); // النشاط بيتحدد من اسم ملف كشف الحساب، زي الفواتير بالظبط
     const dt = d['التاريخ'] instanceof Date ? d['التاريخ'] : null;
     d.__year = dt ? dt.getFullYear() : null;
     d.__month = dt ? (dt.getMonth() + 1) : null;
@@ -1571,6 +1572,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       'المبلغ': Number(row.amount) || 0, 'ملاحظة': row.note,
       __year: row.year, __month: row.month, __quarter: row.quarter, __monthKey: row.month_key
     };
+    d.__activity = guessActivity(row.file_name || ''); // بنشتقها من اسم الملف بدل ما تتخزن في قاعدة البيانات
     computeIndirectSplitPeriods(d);
     return d;
   }
@@ -1589,6 +1591,7 @@ table.datatable details summary:hover { text-decoration: underline; }
   function indirectDiscountByCustomerFiltered() {
     const map = new Map();
     state.indirectDiscounts.forEach(d => {
+      if (!matchFilter('activity', d.__activity)) return;
       const matched = resolveIndirectCustomer(d['العميل']);
       if (!matched) return;
       const periods = d.__splitPeriods || [{ year: d.__year, month: d.__month, amount: d['المبلغ'] || 0 }];
@@ -1823,6 +1826,7 @@ table.datatable details summary:hover { text-decoration: underline; }
   }
   function filteredIndirectDiscounts() {
     return state.indirectDiscounts.filter(d =>
+      matchFilter('activity', d.__activity) &&
       matchFilter('year', d.__year) &&
       matchFilter('month', d.__month)
     );
