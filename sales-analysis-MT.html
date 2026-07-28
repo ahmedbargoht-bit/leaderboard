@@ -849,6 +849,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     routeIndex: null,
     manualRoutes: new Map(), // فرع_العميل -> {route, region, sector} - ربط يدوي محفوظ في السحابة لعملاء مفيش ليهم تطابق في ملف خطوط السير
     routeCatalog: new Map(), // اسم خط السير -> {branch, type, region, sector} - خطوط سير منشأة يدويًا مستقلة عن أي عميل معين
+    itemCatalog: new Map(), // اسم الصنف (منظم) -> {code, category} - كتالوج أكواد الأصناف الثابت
     charts: {},
     filters: { activity: [], branch: [], year: [], month: [], rep: [], item: [] }, // [] = الكل (كل القيم)
     yoyUpToMonth: null,  // شهر نهاية فترة المقارنة السنوية (يُحسب تلقائيًا عند التحليل)
@@ -873,6 +874,11 @@ table.datatable details summary:hover { text-decoration: underline; }
   function guessActivity(filename) {
     for (const a of ACTIVITY_GUESS) if (a.re.test(filename)) return a.label;
     return 'غير محدد';
+  }
+
+  // توحيد اسم الصنف عشان نقدر نطابقه مع كتالوج الأكواد (شيلنا المسافات الزيادة بس، من غير أي تغيير في الحروف)
+  function normItemName(name) {
+    return (name || '').toString().trim().replace(/\s+/g, ' ');
   }
 
   function fmt(n, decimals) {
@@ -1063,6 +1069,37 @@ table.datatable details summary:hover { text-decoration: underline; }
     };
   }
 
+  // رجّع كود الصنف من الكتالوج الثابت (لو موجود)
+  function resolveItemCode(itemName) {
+    const m = state.itemCatalog.get(normItemName(itemName));
+    return m ? (m.code || '') : '';
+  }
+  // رجّع تصنيف الصنف من الكتالوج الثابت (مثلاً: تمر خام، منتج تام سعودى، منتج تام سعودى اون لاين... الخ)
+  function resolveItemCategory(itemName) {
+    const m = state.itemCatalog.get(normItemName(itemName));
+    return m ? (m.category || '') : '';
+  }
+  // ربط/تعديل كود صنف يدويًا (لصنف جديد لسه معندوش كود في الكتالوج، أو تصحيح كود موجود)
+  async function assignItemCode(itemName, code, category) {
+    if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان يتحفظ كود الصنف ده.', 'err'); return false; }
+    const nm = normItemName(itemName);
+    if (!nm) { logStatus('لازم اسم الصنف.', 'err'); return false; }
+    try {
+      const { error } = await sb.from('tamr_sales_item_catalog').upsert(
+        [{ item_name: nm, item_code: code || null, category: category || null, updated_at: new Date().toISOString() }],
+        { onConflict: 'item_name' }
+      );
+      if (error) throw error;
+      state.itemCatalog.set(nm, { code: code || null, category: category || null, name: nm });
+      logStatus(`تم حفظ كود الصنف "${nm}" ✓`, 'ok');
+      renderAll();
+      return true;
+    } catch (e) {
+      logStatus('تعذر حفظ كود الصنف: ' + (e.message || e), 'err');
+      return false;
+    }
+  }
+
   function resolveManualRoute(site) {
     if (!site) return null;
     const m = state.manualRoutes.get(site);
@@ -1182,12 +1219,13 @@ table.datatable details summary:hover { text-decoration: underline; }
     if (!client) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
-      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows] = await Promise.all([
-        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links')
+      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows] = await Promise.all([
+        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog')
       ]);
       if (sb !== client) return; // اتعمل تسجيل خروج أثناء التحميل - متجاهلين النتيجة القديمة
       state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
       state.routeCatalog = new Map(routeCatalogRows.map(r => [r.route, { branch: r.branch, type: r.type, region: r.region, sector: r.sector }]));
+      state.itemCatalog = new Map(itemCatalogRows.map(r => [normItemName(r.item_name), { code: r.item_code, category: r.category, name: r.item_name }]));
       state.returns = returnRows.map(dbRowToReturn);
       state.indirectDiscounts = indirectRows.map(dbRowToIndirectDiscount);
       state.manualIndirectLinks = new Map(indirectLinkRows.map(r => [r.discount_customer, r.matched_customer]));
@@ -2021,6 +2059,181 @@ table.datatable details summary:hover { text-decoration: underline; }
     URL.revokeObjectURL(url);
   };
 
+  // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "الأصناف" - شيتين: بالقيمة (مع تفصيل السنوات لو متاحة) وبالكمية
+  window.exportItemsExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    const ex = state.__itemsExport;
+    if (!ex || !ex.byItemValue || !ex.byItemValue.length) { alert('مفيش بيانات لتصديرها - اعرض تاب "الأصناف" الأول.'); return; }
+    const { years, itemBmap, byItemValue, hasItemReturns, retYearsShownItems, retItemBmap, retByItemTotal, byItemQty, itemQtyValueOfMap } = ex;
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const now = new Date();
+    const RED = 'FFB23B3B', INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2', GOOD = 'FF2F6B45';
+
+    const addLetterhead = (ws, title, lastCol) => {
+      try {
+        const logoEl = document.querySelector('img.logo');
+        const src = logoEl ? logoEl.getAttribute('src') : '';
+        if (src && src.indexOf('base64,') > -1) {
+          const base64 = src.split('base64,')[1];
+          const imgId = wb.addImage({ base64, extension: 'png' });
+          ws.addImage(imgId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 64, height: 64 } });
+        }
+      } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
+      ws.mergeCells(`B1:${lastCol}2`);
+      const titleCell = ws.getCell('B1');
+      titleCell.value = 'نظام تحليل مبيعات تمور الطحان - ' + title;
+      titleCell.font = { bold: true, size: 15, color: { argb: INK } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.mergeCells(`B3:${lastCol}3`);
+      const dateCell = ws.getCell('B3');
+      dateCell.value = 'تاريخ التصدير: ' + String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + now.getFullYear();
+      dateCell.font = { size: 11, color: { argb: 'FF6B5647' } };
+      dateCell.alignment = { horizontal: 'center' };
+      ws.addRow([]);
+    };
+
+    const styleHeaderRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        cell.font = { bold: true, color: { argb: SAND } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+      });
+      row.height = 34;
+    };
+    const styleFooterRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        cell.font = { bold: true, color: { argb: INK } };
+        cell.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
+    };
+    const addSignatures = (ws, colCount) => {
+      ws.addRow([]); ws.addRow([]);
+      const mid1 = Math.max(1, Math.floor(colCount * 0.25)), mid2 = Math.max(mid1 + 1, Math.floor(colCount * 0.7));
+      const labelArr = new Array(colCount).fill('');
+      labelArr[mid1 - 1] = 'مدير مبيعات مودرن تريد'; labelArr[mid2 - 1] = 'مدير عام المبيعات';
+      const sigLabelRow = ws.addRow(labelArr);
+      sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
+      ws.addRow([]);
+      const lineArr = new Array(colCount).fill('');
+      lineArr[mid1 - 1] = '____________________'; lineArr[mid2 - 1] = '____________________';
+      const sigLineRow = ws.addRow(lineArr);
+      sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
+    };
+
+    /* ---- شيت 1: بالقيمة ---- */
+    const ws1 = wb.addWorksheet('الأصناف - بالقيمة', { views: [{ rightToLeft: true }] });
+    const yearCols = years.length >= 2 ? [...years.map(y => 'قيمة ' + y), 'الفرق', 'نسبة النمو'] : (years.length === 1 ? ['قيمة ' + years[0]] : ['القيمة']);
+    const retCols = hasItemReturns ? [...retYearsShownItems.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : [];
+    const headers1 = ['كود الصنف', 'الصنف', 'التصنيف', ...yearCols, 'عدد مرات البيع', ...retCols];
+    const lastColLetter1 = String.fromCharCode(64 + headers1.length); // تقريبي كويس لعدد الأعمدة المتوقع (أقل من 26)
+    addLetterhead(ws1, 'تقرير الأصناف - بالقيمة', lastColLetter1);
+    const headerRow1 = ws1.addRow(headers1);
+    styleHeaderRow(headerRow1);
+    const growthColIdx = years.length >= 2 ? 3 + yearCols.length : -1; // فهرس عمود "نسبة النمو" (لو موجود)
+
+    byItemValue.forEach((x, idx) => {
+      const ym = itemBmap.get(x.key) || new Map();
+      const yearVals = years.map(y => ym.get(y) || 0);
+      const rowVals = [resolveItemCode(x.key), x.key, resolveItemCategory(x.key)];
+      rowVals.push(...yearVals);
+      if (years.length >= 2) {
+        const diff = yearVals[yearVals.length - 1] - yearVals[yearVals.length - 2];
+        const prev = yearVals[yearVals.length - 2];
+        const pct = prev ? diff / prev : (yearVals[yearVals.length - 1] > 0 ? 1 : 0);
+        rowVals.push(diff, pct);
+      } else if (years.length === 0) {
+        rowVals.push(x.sum);
+      }
+      rowVals.push(x.count);
+      if (hasItemReturns) {
+        const retYm = retItemBmap.get(x.key) || new Map();
+        retYearsShownItems.forEach(y => rowVals.push(-(retYm.get(y) || 0)));
+        const retTotal = retByItemTotal.get(x.key) || 0;
+        rowVals.push(x.sum ? retTotal / x.sum : 0, x.sum - retTotal);
+      }
+      const row = ws1.addRow(rowVals);
+      if (idx % 2 === 1) row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      row.getCell(1).alignment = { horizontal: 'center' };
+      row.getCell(2).alignment = { horizontal: 'right' };
+      // تنسيق أرقام: أعمدة القيمة/المرتجع كأرقام صحيحة، وأعمدة النسب كنسبة مئوية
+      for (let c = 4; c <= row.cellCount; c++) {
+        const cell = row.getCell(c);
+        if (typeof cell.value === 'number') {
+          if (c === growthColIdx || (hasItemReturns && c === row.cellCount - 1)) cell.numFmt = '0.0%';
+          else cell.numFmt = '#,##0;[Red]-#,##0';
+        }
+      }
+    });
+
+    const totalCount1 = byItemValue.reduce((s, x) => s + x.count, 0);
+    const totalSum1 = byItemValue.reduce((s, x) => s + x.sum, 0);
+    const footerVals1 = ['-', 'الإجمالي', '-'];
+    if (years.length >= 2) {
+      const totalsYm = years.map(y => byItemValue.reduce((s, x) => s + ((itemBmap.get(x.key) || new Map()).get(y) || 0), 0));
+      footerVals1.push(...totalsYm);
+      const diff = totalsYm[totalsYm.length - 1] - totalsYm[totalsYm.length - 2];
+      const prev = totalsYm[totalsYm.length - 2];
+      footerVals1.push(diff, prev ? diff / prev : 0);
+    } else {
+      footerVals1.push(totalSum1);
+    }
+    footerVals1.push(totalCount1);
+    if (hasItemReturns) {
+      const totalRet = byItemValue.reduce((s, x) => s + (retByItemTotal.get(x.key) || 0), 0);
+      retYearsShownItems.forEach(y => {
+        const t = byItemValue.reduce((s, x) => s + ((retItemBmap.get(x.key) || new Map()).get(y) || 0), 0);
+        footerVals1.push(-t);
+      });
+      footerVals1.push(totalSum1 ? totalRet / totalSum1 : 0, totalSum1 - totalRet);
+    }
+    const footerRow1 = ws1.addRow(footerVals1);
+    styleFooterRow(footerRow1);
+    for (let c = 4; c <= footerRow1.cellCount; c++) {
+      const cell = footerRow1.getCell(c);
+      if (typeof cell.value === 'number') {
+        cell.numFmt = (c === growthColIdx || (hasItemReturns && c === footerRow1.cellCount - 1)) ? '0.0%' : '#,##0;[Red]-#,##0';
+      }
+    }
+
+    ws1.getColumn(1).width = 14; ws1.getColumn(2).width = 38; ws1.getColumn(3).width = 22;
+    for (let c = 4; c <= headers1.length; c++) ws1.getColumn(c).width = 16;
+    addSignatures(ws1, headers1.length);
+
+    /* ---- شيت 2: بالكمية ---- */
+    const ws2 = wb.addWorksheet('الأصناف - بالكمية', { views: [{ rightToLeft: true }] });
+    const headers2 = ['كود الصنف', 'الصنف', 'التصنيف', 'إجمالي الكمية', 'القيمة'];
+    addLetterhead(ws2, 'تقرير الأصناف - بالكمية', 'E');
+    const headerRow2 = ws2.addRow(headers2);
+    styleHeaderRow(headerRow2);
+    byItemQty.forEach((x, idx) => {
+      const row = ws2.addRow([resolveItemCode(x.key), x.key, resolveItemCategory(x.key), x.sum, itemQtyValueOfMap.get(x.key) || 0]);
+      if (idx % 2 === 1) row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      row.getCell(1).alignment = { horizontal: 'center' };
+      row.getCell(2).alignment = { horizontal: 'right' };
+      row.getCell(4).numFmt = '#,##0'; row.getCell(5).numFmt = '#,##0';
+    });
+    const footerRow2 = ws2.addRow(['-', 'الإجمالي', '-', byItemQty.reduce((s, x) => s + x.sum, 0), byItemQty.reduce((s, x) => s + (itemQtyValueOfMap.get(x.key) || 0), 0)]);
+    styleFooterRow(footerRow2);
+    footerRow2.getCell(4).numFmt = '#,##0'; footerRow2.getCell(5).numFmt = '#,##0';
+    ws2.getColumn(1).width = 14; ws2.getColumn(2).width = 38; ws2.getColumn(3).width = 22; ws2.getColumn(4).width = 16; ws2.getColumn(5).width = 16;
+    addSignatures(ws2, headers2.length);
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    a.download = 'الأصناف_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   // تصدير إكسيل لتاب "توزيع الخصم على الفروع" - شيت منفصل لكل عميل عليه خصم غير مباشر فعلي، فيه
   // ملخص الفترة والخصم الكلي، وجدول توزيع الخصم على الفروع مع عدد مواقع/فروع العميل نفسه في كل فرع.
   window.exportBranchIndirectExcel = async function () {
@@ -2453,12 +2666,24 @@ function renderItems() {
   let unmatchedItemReturnVal = 0, unmatchedItemCount = 0;
   retByItemTotal.forEach((val, k) => { if (!allInvoiceItemKeys.has(k)) { unmatchedItemReturnVal += val; unmatchedItemCount++; } });
 
-  const itemValueHeaders = (years.length >= 2 ? ['الصنف', ...yearColumnHeaders(years, 'قيمة '), 'عدد مرات البيع'] : ['الصنف', 'القيمة', 'عدد مرات البيع'])
+  // كود الصنف من الكتالوج الثابت - لو الصنف جديد ومعندوش كود، بنعرض حقل إدخال يدوي جنبه
+  const itemCodeCell = (itemName) => {
+    const code = resolveItemCode(itemName);
+    if (code) return escapeHtml(code);
+    return `<span class="item-code-missing" data-item="${escapeHtml(itemName)}" style="white-space:nowrap;">
+      <input type="text" class="item-code-input" placeholder="كود؟" style="width:60px; font-family:inherit; padding:4px 6px; border-radius:6px; border:1.5px solid var(--bad);">
+      <button type="button" class="btn secondary item-code-save-btn" style="padding:4px 8px; font-size:11px;">حفظ</button>
+    </span>`;
+  };
+  const missingCodeItems = byItemValue.filter(x => !resolveItemCode(x.key));
+  const itemCategoryCell = (itemName) => { const c = resolveItemCategory(itemName); return c ? escapeHtml(c) : '-'; };
+
+  const itemValueHeaders = ['كود الصنف'].concat(years.length >= 2 ? ['الصنف', 'التصنيف', ...yearColumnHeaders(years, 'قيمة '), 'عدد مرات البيع'] : ['الصنف', 'التصنيف', 'القيمة', 'عدد مرات البيع'])
     .concat(hasItemReturns ? [...retYearsShownItems.map(y => 'مرتجع ' + y), 'نسبة المرتجع من البيع', 'الصافي بعد المرتجع'] : []);
   const itemValueRows = byItemValue.map(x => {
-    const base = years.length >= 2
-      ? [x.key, ...yearColumnCells(itemBmap, x.key, years, fmtMoney), fmt(x.count)]
-      : [x.key, fmtMoney(x.sum), fmt(x.count)];
+    const base = [itemCodeCell(x.key)].concat(years.length >= 2
+      ? [x.key, itemCategoryCell(x.key), ...yearColumnCells(itemBmap, x.key, years, fmtMoney), fmt(x.count)]
+      : [x.key, itemCategoryCell(x.key), fmtMoney(x.sum), fmt(x.count)]);
     if (hasItemReturns) {
       const retYm = retItemBmap.get(x.key) || new Map();
       const retCells = retYearsShownItems.map(y => {
@@ -2477,9 +2702,9 @@ function renderItems() {
   const itemValueKeys = byItemValue.map(x => x.key);
   const itemValueTotalCount = byItemValue.reduce((s, x) => s + x.count, 0);
   const itemValueTotalSum = byItemValue.reduce((s, x) => s + x.sum, 0);
-  const itemValueFooter = (years.length >= 2
-    ? ['الإجمالي', ...yearColumnCells(sumYearTotalsBmap(itemBmap, itemValueKeys, years), '__TOTAL__', years, fmtMoney), fmt(itemValueTotalCount)]
-    : ['الإجمالي', fmtMoney(itemValueTotalSum), fmt(itemValueTotalCount)]);
+  const itemValueFooter = ['-'].concat(years.length >= 2
+    ? ['الإجمالي', '-', ...yearColumnCells(sumYearTotalsBmap(itemBmap, itemValueKeys, years), '__TOTAL__', years, fmtMoney), fmt(itemValueTotalCount)]
+    : ['الإجمالي', '-', fmtMoney(itemValueTotalSum), fmt(itemValueTotalCount)]);
   if (hasItemReturns) {
     const retTotalYm = sumYearTotalsBmap(retItemBmap, itemValueKeys, retYearsShownItems).get('__TOTAL__');
     const retCellsFooter = retYearsShownItems.map(y => {
@@ -2492,25 +2717,55 @@ function renderItems() {
   }
 
   const itemQtyValueOf = (key) => groupSum(rows.filter(r => r.item === key), () => 1, r => r.total)[0]?.sum || 0;
-  const itemQtyRows = byItemQty.map(x => [x.key, fmt(x.sum), fmtMoney(itemQtyValueOf(x.key))]);
-  const itemQtyFooter = ['الإجمالي', fmt(byItemQty.reduce((s, x) => s + x.sum, 0)), fmtMoney(byItemQty.reduce((s, x) => s + itemQtyValueOf(x.key), 0))];
+  const itemQtyRows = byItemQty.map(x => [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(x.sum), fmtMoney(itemQtyValueOf(x.key))]);
+  const itemQtyFooter = ['-', 'الإجمالي', '-', fmt(byItemQty.reduce((s, x) => s + x.sum, 0)), fmtMoney(byItemQty.reduce((s, x) => s + itemQtyValueOf(x.key), 0))];
 
   const itemReturnsWarn = (hasItemReturns && unmatchedItemCount > 0)
     ? `<div class="pill-note">⚠ ${fmtMoney(unmatchedItemReturnVal)} من المرتجعات (${fmt(unmatchedItemCount)} صنف) لأسماء أصناف مش موجودة في فواتير المبيعات المرفوعة حاليًا - غالبًا أصناف من نشاط لسه متتحملش.</div>`
     : '';
+  const itemCodeWarn = missingCodeItems.length
+    ? `<div class="pill-note">⚠ ${fmt(missingCodeItems.length)} صنف من غير كود في الكتالوج (غالبًا صنف جديد) - دخل الكود في عمود "كود الصنف" واضغط حفظ.</div>`
+    : '';
+
+  // نخزّن بيانات الجدولين (تفصيلي) عشان زرار تصدير Excel يستخدمها من غير ما يعيد الحساب من الأول
+  const itemQtyValueOfMap = new Map(byItemQty.map(x => [x.key, itemQtyValueOf(x.key)]));
+  state.__itemsExport = { years, itemBmap, byItemValue, hasItemReturns, retYearsShownItems, retItemBmap, retByItemTotal, byItemQty, itemQtyValueOfMap };
 
   el.innerHTML = `
-    <div class="table-title">كل الأصناف (${fmt(byItemValue.length)} صنف) - بالقيمة${hasItemReturns ? ' والمرتجعات' : ''}</div>
+    <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <span>كل الأصناف (${fmt(byItemValue.length)} صنف) - بالقيمة${hasItemReturns ? ' والمرتجعات' : ''}</span>
+      <span class="no-print" style="display:flex; gap:8px;">
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button>
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportItemsExcel()">📊 تصدير Excel</button>
+      </span>
+    </div>
     <div class="hint">الترتيب تنازليًا حسب القيمة. استخدم فلتر "الصنف" أعلى الصفحة لو عايز تركّز على أصناف معينة.</div>
     ${itemReturnsWarn}
+    ${itemCodeWarn}
     <div class="grid2">
       <div class="chart-box"><canvas id="chItemsValue"></canvas></div>
       <div class="table-wrap">${tableHTML(itemValueHeaders, itemValueRows, itemValueFooter)}</div>
     </div>
     <div class="table-title">كل الأصناف (${fmt(byItemQty.length)} صنف) - بالكمية</div>
-    <div class="table-wrap">${tableHTML(['الصنف', 'إجمالي الكمية', 'القيمة'], itemQtyRows, itemQtyFooter)}</div>
+    <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'إجمالي الكمية', 'القيمة'], itemQtyRows, itemQtyFooter)}</div>
+    <div class="print-signature">
+      <div class="sig-block">مدير مبيعات مودرن تريد<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
+      <div class="sig-block">مدير عام المبيعات<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
+    </div>
   `;
   makeChart('chItemsValue', barConfig(byItemValue.slice(0, 10).map(x => x.key), byItemValue.slice(0, 10).map(x => x.sum), 'القيمة (أعلى 10)', true));
+
+  el.querySelectorAll('.item-code-save-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const wrap = btn.closest('.item-code-missing');
+      const itemName = wrap.dataset.item;
+      const input = wrap.querySelector('.item-code-input');
+      const code = input.value.trim();
+      if (!code) { alert('اكتب الكود الأول'); return; }
+      btn.disabled = true; btn.textContent = '...';
+      await assignItemCode(itemName, code, null);
+    });
+  });
 }
 
 /* ---------------- الفروع ---------------- */
