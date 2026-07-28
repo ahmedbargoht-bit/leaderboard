@@ -1199,17 +1199,52 @@ table.datatable details summary:hover { text-decoration: underline; }
     }
   }
 
+  // بيجيب كل صفوف الجدول صفحة صفحة (1000 سطر/صفحة - نفس الحد الأقصى المضمون شغال مع السحابة).
+  // بدل ما ننتظر كل صفحة لحالها بالتتابع (بطيء جدًا مع جداول فيها عشرات الآلاف من الصفوف زي الأصناف)،
+  // بنستخرج العدد الكلي أول حاجة وبعدين بنطلب كل الصفحات مع بعض على دفعات متوازية (6 في نفس الوقت) -
+  // نفس البيانات بالظبط وبنفس الترتيب، بس بوقت أقل بكتير. لو فشل حساب العدد لأي سبب، بنرجع
+  // تلقائيًا للطريقة القديمة المتتابعة عشان نضمن مفيش أي نقص في البيانات.
   async function fetchAllRows(client, table) {
     const pageSize = 1000;
-    let from = 0, all = [];
-    while (true) {
-      const { data, error } = await client.from(table).select('*').range(from, from + pageSize - 1);
-      if (error) throw error;
-      all = all.concat(data || []);
-      if (!data || data.length < pageSize) break;
-      from += pageSize;
+    const CONCURRENCY = 6;
+
+    const fetchSequential = async () => {
+      let from = 0, all = [];
+      while (true) {
+        const { data, error } = await client.from(table).select('*').range(from, from + pageSize - 1);
+        if (error) throw error;
+        all = all.concat(data || []);
+        if (!data || data.length < pageSize) break;
+        from += pageSize;
+      }
+      return all;
+    };
+
+    let total = null;
+    try {
+      const { count, error: countErr } = await client.from(table).select('*', { count: 'exact', head: true });
+      if (countErr) throw countErr;
+      total = typeof count === 'number' ? count : null;
+    } catch (e) {
+      total = null;
     }
-    return all;
+    if (total === null) return fetchSequential(); // خطة احتياطية مضمونة
+    if (!total) return [];
+
+    const pageCount = Math.ceil(total / pageSize);
+    const results = new Array(pageCount);
+    let nextPage = 0;
+    async function worker() {
+      while (nextPage < pageCount) {
+        const i = nextPage++;
+        const from = i * pageSize, to = from + pageSize - 1;
+        const { data, error } = await client.from(table).select('*').range(from, to);
+        if (error) throw error;
+        results[i] = data || [];
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pageCount) }, () => worker()));
+    return results.flat();
   }
 
   async function loadFromCloud() {
