@@ -867,7 +867,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
-    customerItemLookup: { customer: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية
+    customerItemLookup: { customer: '', site: '', activity: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، activity بيضيّق قائمتي العملاء/الفروع وبيتفلتر بيه النتائج كمان
     allItemsReport: { lang: 'ar' }  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
   };
 
@@ -2079,7 +2079,7 @@ table.datatable details summary:hover { text-decoration: underline; }
   // بتفضل زي ما هي دايمًا (بيانات فعلية مش نصوص للترجمة)، الترجمة بتشمل عناوين وتسميات الجدول بس.
   const CUST_REPORT_I18N = {
     ar: {
-      reportTitle: 'تقرير أصناف العميل', customer: 'العميل', period: 'الفترة',
+      reportTitle: 'تقرير أصناف العميل', customer: 'العميل', branchName: 'الفرع', activityLabel: 'النشاط', period: 'الفترة',
       allPeriod: 'كل الفترة المتاحة', allYears: 'كل السنوات', allMonths: 'كل الشهور',
       branchCount: 'عدد الفروع', itemCount: 'عدد الأصناف الموردة',
       itemCode: 'كود الصنف', item: 'الصنف', category: 'التصنيف', qty: 'الكمية', value: 'القيمة',
@@ -2088,7 +2088,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       months: ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
     },
     en: {
-      reportTitle: 'Customer Items Report', customer: 'Customer', period: 'Period',
+      reportTitle: 'Customer Items Report', customer: 'Customer', branchName: 'Branch', activityLabel: 'Activity', period: 'Period',
       allPeriod: 'All available period', allYears: 'All years', allMonths: 'All months',
       branchCount: 'Number of Branches', itemCount: 'Number of Items Supplied',
       itemCode: 'Item Code', item: 'Item', category: 'Category', qty: 'Quantity', value: 'Value',
@@ -2097,7 +2097,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
     },
     fr: {
-      reportTitle: 'Rapport des articles du client', customer: 'Client', period: 'Période',
+      reportTitle: 'Rapport des articles du client', customer: 'Client', branchName: 'Succursale', activityLabel: 'Activité', period: 'Période',
       allPeriod: 'Toute la période disponible', allYears: 'Toutes les années', allMonths: 'Tous les mois',
       branchCount: 'Nombre de succursales', itemCount: "Nombre d'articles fournis",
       itemCode: "Code d'article", item: 'Article', category: 'Catégorie', qty: 'Quantité', value: 'Valeur',
@@ -2106,7 +2106,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       months: ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
     },
     de: {
-      reportTitle: 'Kundenartikelbericht', customer: 'Kunde', period: 'Zeitraum',
+      reportTitle: 'Kundenartikelbericht', customer: 'Kunde', branchName: 'Filiale', activityLabel: 'Aktivität', period: 'Zeitraum',
       allPeriod: 'Gesamter verfügbarer Zeitraum', allYears: 'Alle Jahre', allMonths: 'Alle Monate',
       branchCount: 'Anzahl der Filialen', itemCount: 'Anzahl der gelieferten Artikel',
       itemCode: 'Artikelcode', item: 'Artikel', category: 'Kategorie', qty: 'Menge', value: 'Wert',
@@ -2121,16 +2121,17 @@ table.datatable details summary:hover { text-decoration: underline; }
   // أسماء العملاء/الأصناف بتفضل زي ما هي دايمًا).
   window.printCustomerItemsReport = function () {
     const lk = state.customerItemLookup;
-    if (!lk.customer) { alert('اختار عميل من القائمة الأول.'); return; }
+    if (!lk.customer && !lk.site) { alert('اختار عميل أو فرع من القائمة الأول.'); return; }
     const lang = lk.lang || 'ar';
     const t = CUST_REPORT_I18N[lang] || CUST_REPORT_I18N.ar;
 
     const lkRows = state.itemRows.filter(r =>
-      r.customer === lk.customer &&
+      (lk.site ? r.site === lk.site : r.customer === lk.customer) &&
+      (!lk.activity || r.activity === lk.activity) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
-    if (!lkRows.length) { alert('مفيش بيانات لهذا العميل في الفترة المحددة.'); return; }
+    if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
 
     const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
@@ -2142,6 +2143,9 @@ table.datatable details summary:hover { text-decoration: underline; }
     const yearsLabel = lk.years.length ? lk.years.join(', ') : t.allYears;
     const monthsLabel = lk.months.length ? lk.months.map(m => t.months[Number(m) - 1] || m).join(', ') : t.allMonths;
     const periodLabel = (!lk.years.length && !lk.months.length) ? t.allPeriod : (yearsLabel + ' - ' + monthsLabel);
+
+    const targetLabel = lk.site ? t.branchName : t.customer;
+    const targetValue = lk.site ? lk.site : lk.customer;
 
     const headers = [t.itemCode, t.item, t.category, t.qty, t.value, t.pctOfTotal];
     const rows = byItemCust.map(x => {
@@ -2156,7 +2160,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     printArea.innerHTML = `
       <div class="table-title">${t.reportTitle}</div>
       <div class="hint" style="font-size:13px; margin-bottom:10px;">
-        <b>${t.customer}:</b> ${escapeHtml(lk.customer)} &nbsp;|&nbsp;
+        <b>${targetLabel}:</b> ${escapeHtml(targetValue)} &nbsp;|&nbsp;
+        ${lk.activity ? `<b>${t.activityLabel}:</b> ${escapeHtml(lk.activity)} &nbsp;|&nbsp;` : ''}
         <b>${t.period}:</b> ${escapeHtml(periodLabel)} &nbsp;|&nbsp;
         <b>${t.branchCount}:</b> ${fmt(sites.size)} &nbsp;|&nbsp;
         <b>${t.itemCount}:</b> ${fmt(byItemCust.length)}
@@ -3032,8 +3037,13 @@ function renderItems() {
 
   // أداة "أصناف عميل معين خلال فترة معينة" - مستقلة تمامًا عن فلاتر الصفحة العلوية، وبتاخد بياناتها
   // من كل بيانات الأصناف المرفوعة (state.itemRows بالكامل) بغض النظر عن أي فلتر شغال فوق الصفحة.
-  const custNamesForLookup = Array.from(new Set(state.itemRows.map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const lkActivity = state.customerItemLookup.activity;
+  const activitiesForLookup = Array.from(new Set(state.itemRows.map(r => r.activity).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const activityOptionsHtml = activitiesForLookup.map(a => `<option value="${escapeHtml(a)}" ${a === lkActivity ? 'selected' : ''}>${escapeHtml(a)}</option>`).join('');
+  const custNamesForLookup = Array.from(new Set(state.itemRows.filter(r => !lkActivity || r.activity === lkActivity).map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const custOptionsHtml = custNamesForLookup.map(c => `<option value="${escapeHtml(c)}" ${c === state.customerItemLookup.customer ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+  const sitesForLookup = Array.from(new Set(state.itemRows.filter(r => !lkActivity || r.activity === lkActivity).map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const siteOptionsHtml = sitesForLookup.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
 
   el.innerHTML = `
     <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
@@ -3077,14 +3087,28 @@ function renderItems() {
         <span>🔍 أصناف عميل معين خلال فترة معينة</span>
         <button type="button" class="btn secondary" id="custLookupPrintBtn" style="padding:6px 14px; font-size:12.5px;">🖨️ طباعة PDF - تقرير العميل</button>
       </div>
-      <div class="hint" style="margin-bottom:10px;">اختار العميل - ولو ما حددتش سنة أو شهر هيوريك كل الفترة المتاحة له. الفلاتر دي مستقلة عن فلاتر الصفحة فوق.</div>
+      <div class="hint" style="margin-bottom:10px;">اختار العميل (أو دور على فرع بالاسم) - ولو ما حددتش سنة أو شهر هيوريك كل الفترة المتاحة له. الفلاتر دي مستقلة عن فلاتر الصفحة فوق.</div>
       <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px;">
+        <div>
+          <div class="hint" style="margin:0 0 4px;">النشاط</div>
+          <select id="custLookupActivitySelect" style="min-width:160px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+            <option value="">-- كل الأنشطة --</option>
+            ${activityOptionsHtml}
+          </select>
+        </div>
         <div>
           <div class="hint" style="margin:0 0 4px;">العميل</div>
           <select id="custLookupSelect" style="min-width:240px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
             <option value="">-- اختر العميل --</option>
             ${custOptionsHtml}
           </select>
+        </div>
+        <div>
+          <div class="hint" style="margin:0 0 4px;">أو دور على فرع عميل بالاسم</div>
+          <input type="text" id="custLookupSiteInput" list="custLookupSiteDatalist" placeholder="اكتب اسم الفرع..." autocomplete="off"
+            value="${escapeHtml(state.customerItemLookup.site || '')}"
+            style="min-width:220px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <datalist id="custLookupSiteDatalist">${siteOptionsHtml}</datalist>
         </div>
         <div class="msfilter" style="display:inline-block;">
           <button type="button" class="ms-btn" id="custLookupYearBtn">السنة: الكل ▾</button>
@@ -3127,13 +3151,14 @@ function renderItems() {
     const resultEl = el.querySelector('#custLookupResult');
     if (!resultEl) return;
     const lk = state.customerItemLookup;
-    if (!lk.customer) { resultEl.innerHTML = '<div class="pill-note">اختار عميل من القائمة فوق الأول.</div>'; return; }
+    if (!lk.customer && !lk.site) { resultEl.innerHTML = '<div class="pill-note">اختار عميل أو دور على فرع بالاسم من فوق الأول.</div>'; return; }
     const lkRows = state.itemRows.filter(r =>
-      r.customer === lk.customer &&
+      (lk.site ? r.site === lk.site : r.customer === lk.customer) &&
+      (!lk.activity || r.activity === lk.activity) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
-    if (!lkRows.length) { resultEl.innerHTML = '<div class="pill-note">مفيش بيانات لهذا العميل في الفترة المحددة.</div>'; return; }
+    if (!lkRows.length) { resultEl.innerHTML = '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>'; return; }
     const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
     lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
@@ -3142,8 +3167,11 @@ function renderItems() {
     const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
     const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
     const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), fmtMoney(lkTotalSum), fmt(lkTotalCount)];
+    const targetLabel = lk.site ? 'الفرع' : 'العميل';
+    const targetName = lk.site ? lk.site : lk.customer;
+    const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
     resultEl.innerHTML = `
-      <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم "${escapeHtml(lk.customer)}" في الفترة دي</div>
+      <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}" في الفترة دي${activityNote}</div>
       <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
     `;
     resultEl.querySelectorAll('.item-code-save-btn').forEach(btn => {
@@ -3158,11 +3186,42 @@ function renderItems() {
       });
     });
   };
+  const custActivitySelect = el.querySelector('#custLookupActivitySelect');
+  if (custActivitySelect) {
+    custActivitySelect.addEventListener('change', () => {
+      state.customerItemLookup.activity = custActivitySelect.value;
+      state.customerItemLookup.customer = '';
+      state.customerItemLookup.site = '';
+      renderItems();
+    });
+  }
   const custSelect = el.querySelector('#custLookupSelect');
   if (custSelect) {
     custSelect.addEventListener('change', () => {
       state.customerItemLookup.customer = custSelect.value;
+      if (custSelect.value) {
+        state.customerItemLookup.site = '';
+        const siteInput = el.querySelector('#custLookupSiteInput');
+        if (siteInput) siteInput.value = '';
+      }
       renderCustLookupResult();
+    });
+  }
+  const custSiteInput = el.querySelector('#custLookupSiteInput');
+  if (custSiteInput) {
+    custSiteInput.addEventListener('input', () => {
+      const val = custSiteInput.value.trim();
+      if (!val) {
+        if (state.customerItemLookup.site) { state.customerItemLookup.site = ''; renderCustLookupResult(); }
+        return;
+      }
+      if (sitesForLookup.includes(val)) {
+        state.customerItemLookup.site = val;
+        state.customerItemLookup.customer = '';
+        const custSelectEl = el.querySelector('#custLookupSelect');
+        if (custSelectEl) custSelectEl.value = '';
+        renderCustLookupResult();
+      }
     });
   }
   const custLangSelect = el.querySelector('#custLookupLangSelect');
