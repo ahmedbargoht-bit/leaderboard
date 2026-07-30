@@ -220,6 +220,11 @@ table.datatable details summary:hover { text-decoration: underline; }
   body.print-only-customerreport #panel-items > *:not(#custLookupPrintWrap) { display: none !important; }
   body.print-only-customerreport #custLookupPrintWrap { display: block !important; }
 
+  /* طباعة "تقرير شامل لكل الأصناف" بس (زرار منفصل تمامًا) - بيخفي كل حاجة تانية في تاب الأصناف ويبين
+     التقرير المُجهّز مسبقًا بس */
+  body.print-only-allitemsreport #panel-items > *:not(#allItemsPrintWrap) { display: none !important; }
+  body.print-only-allitemsreport #allItemsPrintWrap { display: block !important; }
+
   /* إظهار كل تفاصيل الفروع (details/summary) كاملة عند الطباعة حتى لو مقفولة على الشاشة */
   table.datatable details:not([open]) > *:not(summary) { display: block !important; }
   table.datatable details summary::after { content: ""; }
@@ -862,7 +867,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
-    customerItemLookup: { customer: '', years: [], months: [], lang: 'ar' }  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية
+    customerItemLookup: { customer: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية
+    allItemsReport: { lang: 'ar' }  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -2169,6 +2175,77 @@ table.datatable details summary:hover { text-decoration: underline; }
     setTimeout(cleanup, 30000);
   };
 
+  // قاموس ترجمة تسميات "تقرير كل الأصناف الشامل" (زرار منفصل تمامًا عن أزرار طباعة/تصدير الأصناف
+  // الموجودة فوق الجدول) - عربي/إنجليزي/فرنسي/ألماني. أسماء الأصناف نفسها بتفضل زي ما هي دايمًا.
+  const ALL_ITEMS_REPORT_I18N = {
+    ar: {
+      reportTitle: 'تقرير شامل لكل الأصناف', itemCount: 'عدد الأصناف',
+      itemCode: 'كود الصنف', item: 'الصنف', category: 'التصنيف', qty: 'الكمية', value: 'القيمة',
+      pctOfTotal: 'نسبة من إجمالي المبيعات', total: 'الإجمالي',
+      sigSales: 'مدير مبيعات مودرن تريد', sigGM: 'مدير عام المبيعات', sigLine: 'الاسم / التوقيع / التاريخ'
+    },
+    en: {
+      reportTitle: 'Full Items Report', itemCount: 'Number of Items',
+      itemCode: 'Item Code', item: 'Item', category: 'Category', qty: 'Quantity', value: 'Value',
+      pctOfTotal: '% of Total Sales', total: 'Total',
+      sigSales: 'Modern Trade Sales Manager', sigGM: 'General Sales Manager', sigLine: 'Name / Signature / Date'
+    },
+    fr: {
+      reportTitle: 'Rapport complet des articles', itemCount: "Nombre d'articles",
+      itemCode: "Code d'article", item: 'Article', category: 'Catégorie', qty: 'Quantité', value: 'Valeur',
+      pctOfTotal: '% du total des ventes', total: 'Total',
+      sigSales: 'Directeur des ventes Modern Trade', sigGM: 'Directeur général des ventes', sigLine: 'Nom / Signature / Date'
+    },
+    de: {
+      reportTitle: 'Vollständiger Artikelbericht', itemCount: 'Anzahl der Artikel',
+      itemCode: 'Artikelcode', item: 'Artikel', category: 'Kategorie', qty: 'Menge', value: 'Wert',
+      pctOfTotal: '% des Gesamtumsatzes', total: 'Gesamt',
+      sigSales: 'Verkaufsleiter Modern Trade', sigGM: 'Generalverkaufsleiter', sigLine: 'Name / Unterschrift / Datum'
+    }
+  };
+
+  // طباعة تقرير شامل لكل الأصناف (زرار منفصل تمامًا عن "طباعة PDF"/"تصدير Excel" الموجودين فوق جدول
+  // الأصناف) - بيعرض الأصناف الظاهرة حاليًا (حسب فلاتر الصفحة العلوية) مع نسبة كل صنف من إجمالي
+  // المبيعات، بألوان وهوية الطحان، وبيدعم 4 لغات لتسميات وعناوين التقرير.
+  window.printAllItemsReport = function () {
+    const ex = state.__itemsExport;
+    if (!ex || !ex.byItemValue || !ex.byItemValue.length) { alert('مفيش بيانات لعرضها - اعرض تاب "الأصناف" الأول.'); return; }
+    const lang = (state.allItemsReport && state.allItemsReport.lang) || 'ar';
+    const t = ALL_ITEMS_REPORT_I18N[lang] || ALL_ITEMS_REPORT_I18N.ar;
+
+    const { byItemValue, itemQtyByItemMap } = ex;
+    const totalSum = byItemValue.reduce((s, x) => s + x.sum, 0);
+    const totalQty = byItemValue.reduce((s, x) => s + (itemQtyByItemMap.get(x.key) || 0), 0);
+
+    const headers = [t.itemCode, t.item, t.category, t.qty, t.value, t.pctOfTotal];
+    const rows = byItemValue.map(x => {
+      const pct = totalSum ? x.sum / totalSum : 0;
+      return [resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', fmt(itemQtyByItemMap.get(x.key) || 0), fmtMoney(x.sum), fmtPct(pct)];
+    });
+    const footer = ['-', t.total, '-', fmt(totalQty), fmtMoney(totalSum), fmtPct(1)];
+
+    const printArea = document.getElementById('allItemsPrintWrap');
+    if (!printArea) return;
+    printArea.setAttribute('dir', lang === 'ar' ? 'rtl' : 'ltr');
+    printArea.innerHTML = `
+      <div class="table-title">${t.reportTitle}</div>
+      <div class="hint" style="font-size:13px; margin-bottom:10px;">
+        <b>${t.itemCount}:</b> ${fmt(byItemValue.length)}
+      </div>
+      <div class="table-wrap">${tableHTML(headers, rows, footer)}</div>
+      <div class="print-signature">
+        <div class="sig-block">${t.sigSales}<div class="sig-line">${t.sigLine}</div></div>
+        <div class="sig-block">${t.sigGM}<div class="sig-line">${t.sigLine}</div></div>
+      </div>
+    `;
+
+    document.body.classList.add('print-only-allitemsreport');
+    const cleanup = () => document.body.classList.remove('print-only-allitemsreport');
+    window.addEventListener('afterprint', cleanup, { once: true });
+    window.print();
+    setTimeout(cleanup, 30000);
+  };
+
   // تصدير Excel ملون بشعار الشركة وتوقيعات (مدير مبيعات مودرن تريد / مدير عام المبيعات) لتاب "خصومات العملاء"
   window.exportCustomerDiscountsExcel = async function () {
     if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
@@ -2949,7 +3026,9 @@ function renderItems() {
 
   // نخزّن بيانات الجدولين (تفصيلي) عشان زرار تصدير Excel يستخدمها من غير ما يعيد الحساب من الأول
   const itemQtyValueOfMap = new Map(byItemQty.map(x => [x.key, itemQtyValueOf(x.key)]));
-  state.__itemsExport = { years, itemBmap, byItemValue, hasItemReturns, retYearsShownItems, retItemBmap, retByItemTotal, byItemQty, itemQtyValueOfMap };
+  // خريطة صنف -> إجمالي الكمية (عكس itemQtyValueOfMap) - يستخدمها زرار "تقرير شامل لكل الأصناف" المنفصل
+  const itemQtyByItemMap = new Map(byItemQty.map(x => [x.key, x.sum]));
+  state.__itemsExport = { years, itemBmap, byItemValue, hasItemReturns, retYearsShownItems, retItemBmap, retByItemTotal, byItemQty, itemQtyValueOfMap, itemQtyByItemMap };
 
   // أداة "أصناف عميل معين خلال فترة معينة" - مستقلة تمامًا عن فلاتر الصفحة العلوية، وبتاخد بياناتها
   // من كل بيانات الأصناف المرفوعة (state.itemRows بالكامل) بغض النظر عن أي فلتر شغال فوق الصفحة.
@@ -2977,6 +3056,22 @@ function renderItems() {
       <div class="sig-block">مدير مبيعات مودرن تريد<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
       <div class="sig-block">مدير عام المبيعات<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
     </div>
+    <div class="card no-print" style="margin-top:16px; padding:16px 18px; box-shadow:none; border:1.5px solid var(--sand-dark);">
+      <div class="table-title" style="margin:0 0 10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <span>📄 تقرير شامل لكل الأصناف</span>
+        <span style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <select id="allItemsLangSelect" style="min-width:140px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+            <option value="ar" ${state.allItemsReport.lang === 'ar' ? 'selected' : ''}>العربية</option>
+            <option value="en" ${state.allItemsReport.lang === 'en' ? 'selected' : ''}>English</option>
+            <option value="fr" ${state.allItemsReport.lang === 'fr' ? 'selected' : ''}>Français</option>
+            <option value="de" ${state.allItemsReport.lang === 'de' ? 'selected' : ''}>Deutsch</option>
+          </select>
+          <button type="button" class="btn secondary" id="allItemsPrintBtn" style="padding:6px 14px; font-size:12.5px;">🖨️ طباعة PDF - تقرير شامل</button>
+        </span>
+      </div>
+      <div class="hint">تقرير مستقل بيعرض كل الأصناف الظاهرة حاليًا (حسب فلاتر الصفحة فوق) مع نسبة كل صنف من إجمالي المبيعات، بألوان وهوية الطحان.</div>
+    </div>
+    <div id="allItemsPrintWrap" style="display:none;"></div>
     <div class="card no-print" style="margin-top:16px; padding:16px 18px; box-shadow:none; border:1.5px solid var(--sand-dark);">
       <div class="table-title" style="margin:0 0 10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <span>🔍 أصناف عميل معين خلال فترة معينة</span>
@@ -3079,6 +3174,14 @@ function renderItems() {
   const custPrintBtn = el.querySelector('#custLookupPrintBtn');
   if (custPrintBtn) {
     custPrintBtn.addEventListener('click', () => printCustomerItemsReport());
+  }
+  const allItemsLangSelect = el.querySelector('#allItemsLangSelect');
+  if (allItemsLangSelect) {
+    allItemsLangSelect.addEventListener('change', () => { state.allItemsReport.lang = allItemsLangSelect.value; });
+  }
+  const allItemsPrintBtn = el.querySelector('#allItemsPrintBtn');
+  if (allItemsPrintBtn) {
+    allItemsPrintBtn.addEventListener('click', () => printAllItemsReport());
   }
   const custYearsForLookup = Array.from(new Set(state.itemRows.map(r => r.year))).filter(Boolean).sort((a, b) => a - b).map(String);
   const custMonthsForLookup = Array.from({ length: 12 }, (_, i) => String(i + 1));
