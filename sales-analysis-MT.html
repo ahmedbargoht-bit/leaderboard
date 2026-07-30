@@ -856,7 +856,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectNetScope: 'partial',  // 'partial' = الصافي بس في الفترات اللي فيها خصم غير مباشر مسجل، 'full' = الصافي الكامل لكل الفترات
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
-    branchIndirectSelectedBranches: []  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
+    branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
+    customerItemLookup: { customer: '', years: [], months: [] }  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -1201,12 +1202,13 @@ table.datatable details summary:hover { text-decoration: underline; }
 
   // بيجيب كل صفوف الجدول صفحة صفحة (1000 سطر/صفحة - نفس الحد الأقصى المضمون شغال مع السحابة).
   // بدل ما ننتظر كل صفحة لحالها بالتتابع (بطيء جدًا مع جداول فيها عشرات الآلاف من الصفوف زي الأصناف)،
-  // بنستخرج العدد الكلي أول حاجة وبعدين بنطلب كل الصفحات مع بعض على دفعات متوازية (6 في نفس الوقت) -
-  // نفس البيانات بالظبط وبنفس الترتيب، بس بوقت أقل بكتير. لو فشل حساب العدد لأي سبب، بنرجع
-  // تلقائيًا للطريقة القديمة المتتابعة عشان نضمن مفيش أي نقص في البيانات.
+  // بنستخرج العدد الكلي أول حاجة وبعدين بنطلب الصفحات مع بعض على دفعات متوازية محدودة - نفس البيانات
+  // بالظبط وبنفس الترتيب، بس بوقت أقل بكتير. مهم جدًا: أي فشل في الطريقة السريعة دي (تايم أوت، تزاحم
+  // على السحابة، ...) بيرجع تلقائيًا للطريقة القديمة المتتابعة (المضمونة 100%) عشان التحميل ميفشلش
+  // خالص أبدًا - أسوأ حالة ممكنة هي إنه يرجع بنفس سرعة الأول، مش إنه يقف.
   async function fetchAllRows(client, table) {
     const pageSize = 1000;
-    const CONCURRENCY = 6;
+    const CONCURRENCY = 3; // متحفظين في العدد عشان منزودش الضغط على السحابة ونسبب تايم أوت
 
     const fetchSequential = async () => {
       let from = 0, all = [];
@@ -1220,31 +1222,44 @@ table.datatable details summary:hover { text-decoration: underline; }
       return all;
     };
 
-    let total = null;
-    try {
+    const fetchPageWithRetry = async (i) => {
+      const from = i * pageSize, to = from + pageSize - 1;
+      let lastErr;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { data, error } = await client.from(table).select('*').range(from, to);
+        if (!error) return data || [];
+        lastErr = error;
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1))); // مهلة صغيرة متزايدة قبل إعادة المحاولة
+      }
+      throw lastErr;
+    };
+
+    const fetchParallel = async () => {
       const { count, error: countErr } = await client.from(table).select('*', { count: 'exact', head: true });
       if (countErr) throw countErr;
-      total = typeof count === 'number' ? count : null;
-    } catch (e) {
-      total = null;
-    }
-    if (total === null) return fetchSequential(); // خطة احتياطية مضمونة
-    if (!total) return [];
+      const total = typeof count === 'number' ? count : null;
+      if (total === null) throw new Error('تعذر حساب عدد الصفوف');
+      if (!total) return [];
 
-    const pageCount = Math.ceil(total / pageSize);
-    const results = new Array(pageCount);
-    let nextPage = 0;
-    async function worker() {
-      while (nextPage < pageCount) {
-        const i = nextPage++;
-        const from = i * pageSize, to = from + pageSize - 1;
-        const { data, error } = await client.from(table).select('*').range(from, to);
-        if (error) throw error;
-        results[i] = data || [];
+      const pageCount = Math.ceil(total / pageSize);
+      const results = new Array(pageCount);
+      let nextPage = 0;
+      async function worker() {
+        while (nextPage < pageCount) {
+          const i = nextPage++;
+          results[i] = await fetchPageWithRetry(i);
+        }
       }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pageCount) }, () => worker()));
+      return results.flat();
+    };
+
+    try {
+      return await fetchParallel();
+    } catch (e) {
+      // أي مشكلة في الطريقة السريعة - نرجع فورًا للطريقة القديمة المضمونة بدل ما نوقف التحميل خالص
+      return fetchSequential();
     }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pageCount) }, () => worker()));
-    return results.flat();
   }
 
   async function loadFromCloud() {
@@ -1863,6 +1878,46 @@ table.datatable details summary:hover { text-decoration: underline; }
       if (!p.contains(e.target)) p.classList.remove('open');
     });
   });
+
+  // نسخة عامة من دروب داون الفلتر (checkbox) لكنها مستقلة تمامًا عن state.filters العام -
+  // بتكتب مباشرة في المصفوفة selectedArr اللي بتتبعتلها (بالمرجع)، وبتنادي onChange بدل ما تعمل renderAll()
+  // كامل. مستخدمة في أدوات محلية جوه تاب معين (زي أداة "أصناف عميل معين") من غير ما تأثر على فلاتر الصفحة.
+  function wireLocalMultiSelect(btn, panel, values, selectedArr, labelFn, titlePrefix, onChange) {
+    if (!panel || !btn) return;
+    const toLabel = labelFn || (v => v);
+    panel.innerHTML =
+      `<label class="ms-item ms-all"><input type="checkbox" class="ms-all-cb"><span>الكل</span></label>
+       <div class="ms-sep"></div>` +
+      values.map(v => `<label class="ms-item"><input type="checkbox" value="${String(v)}" ${selectedArr.includes(String(v)) ? 'checked' : ''}><span>${toLabel(v)}</span></label>`).join('');
+
+    const allCb = panel.querySelector('.ms-all-cb');
+    allCb.checked = selectedArr.length === 0;
+    const setLabel = () => {
+      let label;
+      if (selectedArr.length === 0) label = titlePrefix + ': الكل';
+      else if (selectedArr.length === 1) label = titlePrefix + ': ' + toLabel(selectedArr[0]);
+      else label = titlePrefix + ': ' + selectedArr.length + ' محدد من ' + values.length;
+      btn.textContent = label + ' ▾';
+    };
+    allCb.addEventListener('change', () => {
+      selectedArr.length = 0;
+      panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => cb.checked = false);
+      allCb.checked = true;
+      setLabel();
+      onChange();
+    });
+    panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const sel = new Set(selectedArr);
+        if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
+        selectedArr.length = 0; selectedArr.push(...sel);
+        allCb.checked = selectedArr.length === 0;
+        setLabel();
+        onChange();
+      });
+    });
+    setLabel();
+  }
 
   function matchFilter(key, value) {
     const sel = state.filters[key];
@@ -2766,6 +2821,11 @@ function renderItems() {
   const itemQtyValueOfMap = new Map(byItemQty.map(x => [x.key, itemQtyValueOf(x.key)]));
   state.__itemsExport = { years, itemBmap, byItemValue, hasItemReturns, retYearsShownItems, retItemBmap, retByItemTotal, byItemQty, itemQtyValueOfMap };
 
+  // أداة "أصناف عميل معين خلال فترة معينة" - مستقلة تمامًا عن فلاتر الصفحة العلوية، وبتاخد بياناتها
+  // من كل بيانات الأصناف المرفوعة (state.itemRows بالكامل) بغض النظر عن أي فلتر شغال فوق الصفحة.
+  const custNamesForLookup = Array.from(new Set(state.itemRows.map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const custOptionsHtml = custNamesForLookup.map(c => `<option value="${escapeHtml(c)}" ${c === state.customerItemLookup.customer ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+
   el.innerHTML = `
     <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
       <span>كل الأصناف (${fmt(byItemValue.length)} صنف) - بالقيمة${hasItemReturns ? ' والمرتجعات' : ''}</span>
@@ -2787,6 +2847,28 @@ function renderItems() {
       <div class="sig-block">مدير مبيعات مودرن تريد<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
       <div class="sig-block">مدير عام المبيعات<div class="sig-line">الاسم / التوقيع / التاريخ</div></div>
     </div>
+    <div class="card no-print" style="margin-top:16px; padding:16px 18px; box-shadow:none; border:1.5px solid var(--sand-dark);">
+      <div class="table-title" style="margin:0 0 10px;">🔍 أصناف عميل معين خلال فترة معينة</div>
+      <div class="hint" style="margin-bottom:10px;">اختار العميل - ولو ما حددتش سنة أو شهر هيوريك كل الفترة المتاحة له. الفلاتر دي مستقلة عن فلاتر الصفحة فوق.</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px;">
+        <div>
+          <div class="hint" style="margin:0 0 4px;">العميل</div>
+          <select id="custLookupSelect" style="min-width:240px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+            <option value="">-- اختر العميل --</option>
+            ${custOptionsHtml}
+          </select>
+        </div>
+        <div class="msfilter" style="display:inline-block;">
+          <button type="button" class="ms-btn" id="custLookupYearBtn">السنة: الكل ▾</button>
+          <div class="ms-panel" id="custLookupYearPanel"></div>
+        </div>
+        <div class="msfilter" style="display:inline-block;">
+          <button type="button" class="ms-btn" id="custLookupMonthBtn">الشهر: الكل ▾</button>
+          <div class="ms-panel" id="custLookupMonthPanel"></div>
+        </div>
+      </div>
+      <div id="custLookupResult"></div>
+    </div>
   `;
   makeChart('chItemsValue', barConfig(byItemValue.slice(0, 10).map(x => x.key), byItemValue.slice(0, 10).map(x => x.sum), 'القيمة (أعلى 10)', true));
 
@@ -2801,6 +2883,62 @@ function renderItems() {
       await assignItemCode(itemName, code, null);
     });
   });
+
+  // -- أداة "أصناف عميل معين خلال فترة معينة" --
+  const renderCustLookupResult = () => {
+    const resultEl = el.querySelector('#custLookupResult');
+    if (!resultEl) return;
+    const lk = state.customerItemLookup;
+    if (!lk.customer) { resultEl.innerHTML = '<div class="pill-note">اختار عميل من القائمة فوق الأول.</div>'; return; }
+    const lkRows = state.itemRows.filter(r =>
+      r.customer === lk.customer &&
+      (!lk.years.length || lk.years.includes(String(r.year))) &&
+      (!lk.months.length || lk.months.includes(String(r.monthNum)))
+    );
+    if (!lkRows.length) { resultEl.innerHTML = '<div class="pill-note">مفيش بيانات لهذا العميل في الفترة المحددة.</div>'; return; }
+    const byItemCust = groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
+    const custQtyOf = new Map();
+    lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+    const lkTableRows = byItemCust.map(x => [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), fmtMoney(x.sum), fmt(x.count)]);
+    const lkTotalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
+    const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
+    const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
+    const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), fmtMoney(lkTotalSum), fmt(lkTotalCount)];
+    resultEl.innerHTML = `
+      <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم "${escapeHtml(lk.customer)}" في الفترة دي</div>
+      <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
+    `;
+    resultEl.querySelectorAll('.item-code-save-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const wrap = btn.closest('.item-code-missing');
+        const itemName = wrap.dataset.item;
+        const input = wrap.querySelector('.item-code-input');
+        const code = input.value.trim();
+        if (!code) { alert('اكتب الكود الأول'); return; }
+        btn.disabled = true; btn.textContent = '...';
+        await assignItemCode(itemName, code, null);
+      });
+    });
+  };
+  const custSelect = el.querySelector('#custLookupSelect');
+  if (custSelect) {
+    custSelect.addEventListener('change', () => {
+      state.customerItemLookup.customer = custSelect.value;
+      renderCustLookupResult();
+    });
+  }
+  const custYearsForLookup = Array.from(new Set(state.itemRows.map(r => r.year))).filter(Boolean).sort((a, b) => a - b).map(String);
+  const custMonthsForLookup = Array.from({ length: 12 }, (_, i) => String(i + 1));
+  wireLocalMultiSelect(
+    el.querySelector('#custLookupYearBtn'), el.querySelector('#custLookupYearPanel'),
+    custYearsForLookup, state.customerItemLookup.years, v => v, 'السنة', renderCustLookupResult
+  );
+  wireLocalMultiSelect(
+    el.querySelector('#custLookupMonthBtn'), el.querySelector('#custLookupMonthPanel'),
+    custMonthsForLookup, state.customerItemLookup.months, v => MONTH_NAMES_AR[Number(v) - 1] || v, 'الشهر', renderCustLookupResult
+  );
+  wireMsToggle(el);
+  renderCustLookupResult();
 }
 
 /* ---------------- الفروع ---------------- */
