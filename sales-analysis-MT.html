@@ -1085,6 +1085,28 @@ table.datatable details summary:hover { text-decoration: underline; }
     const m = state.itemCatalog.get(normItemName(itemName));
     return m ? (m.category || '') : '';
   }
+  // بيرتب قائمة أصناف (فيها .key = اسم الصنف و.sum = القيمة/الكمية) بحيث الأصناف من نفس التصنيف
+  // تتجمع تحت بعضها - التصنيفات نفسها مرتبة تنازليًا حسب إجمالي قيمتها، والأصناف من غير تصنيف معروف
+  // بتتحط في الآخر دايمًا بغض النظر عن قيمتها. مستخدمة في كل جدول/تصدير بيعرض عمود "التصنيف".
+  function groupItemsByCategoryDesc(list) {
+    const groups = new Map();
+    list.forEach(x => {
+      const cat = resolveItemCategory(x.key) || '';
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(x);
+    });
+    const catGroups = Array.from(groups.entries()).map(([cat, items]) => ({
+      cat,
+      items: items.slice().sort((a, b) => b.sum - a.sum),
+      total: items.reduce((s, i) => s + i.sum, 0)
+    }));
+    catGroups.sort((a, b) => {
+      if (!a.cat && b.cat) return 1;
+      if (!b.cat && a.cat) return -1;
+      return b.total - a.total;
+    });
+    return catGroups.flatMap(g => g.items);
+  }
   // ربط/تعديل كود صنف يدويًا (لصنف جديد لسه معندوش كود في الكتالوج، أو تصحيح كود موجود)
   async function assignItemCode(itemName, code, category) {
     if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان يتحفظ كود الصنف ده.', 'err'); return false; }
@@ -2104,7 +2126,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     );
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل في الفترة المحددة.'); return; }
 
-    const byItemCust = groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
+    const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
     lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
     const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
@@ -2844,8 +2866,11 @@ function renderItems() {
   const el = document.getElementById('panel-items');
   if (!rows.length) { el.innerHTML = emptyState('لا توجد بيانات أصناف'); return; }
 
-  const byItemValue = groupSum(rows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
-  const byItemQty = groupSum(rows, r => r.item, r => (r.qtyCarton || 0) + (r.qtyPiece || 0)).sort((a, b) => b.sum - a.sum);
+  // نرتب الأصناف حسب القيمة/الكمية الأول (byItemValueSorted بتستخدم للشارت "أعلى 10" فعليًا)، وبعدين
+  // نجمّع صفوف الجدول (بالقيمة والكمية) حسب التصنيف عشان كل تصنيف يظهر تحت بعضه
+  const byItemValueSorted = groupSum(rows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
+  const byItemValue = groupItemsByCategoryDesc(byItemValueSorted);
+  const byItemQty = groupItemsByCategoryDesc(groupSum(rows, r => r.item, r => (r.qtyCarton || 0) + (r.qtyPiece || 0)).sort((a, b) => b.sum - a.sum));
 
   const years = activeYears(rows, r => r.year);
   const itemBmap = yearBreakdownMap(rows, r => r.item, r => r.year, r => r.total);
@@ -2988,7 +3013,7 @@ function renderItems() {
     </div>
     <div id="custLookupPrintWrap" style="display:none;"></div>
   `;
-  makeChart('chItemsValue', barConfig(byItemValue.slice(0, 10).map(x => x.key), byItemValue.slice(0, 10).map(x => x.sum), 'القيمة (أعلى 10)', true));
+  makeChart('chItemsValue', barConfig(byItemValueSorted.slice(0, 10).map(x => x.key), byItemValueSorted.slice(0, 10).map(x => x.sum), 'القيمة (أعلى 10)', true));
 
   el.querySelectorAll('.item-code-save-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -3014,7 +3039,7 @@ function renderItems() {
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
     if (!lkRows.length) { resultEl.innerHTML = '<div class="pill-note">مفيش بيانات لهذا العميل في الفترة المحددة.</div>'; return; }
-    const byItemCust = groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
+    const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
     lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
     const lkTableRows = byItemCust.map(x => [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), fmtMoney(x.sum), fmt(x.count)]);
