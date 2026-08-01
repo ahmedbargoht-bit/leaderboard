@@ -872,7 +872,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     customerItemLookup: { customer: '', site: '', activity: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، activity بيضيّق قائمتي العملاء/الفروع وبيتفلتر بيه النتائج كمان
     allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
     repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
-    repRoutesFilter: { group: '', route: '', search: '' }  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
+    repRoutesFilter: { group: '', route: '', search: '' },  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
+    repRouteSiteLinks: new Map()  // اسم فرع الفاتورة (منظم) -> اسم الفرع الصحيح في دليل خطوط سير المناديب - ربط يدوي محفوظ في السحابة لحل فوارق الكتابة
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -895,6 +896,13 @@ table.datatable details summary:hover { text-decoration: underline; }
   // توحيد اسم الصنف عشان نقدر نطابقه مع كتالوج الأكواد (شيلنا المسافات الزيادة بس، من غير أي تغيير في الحروف)
   function normItemName(name) {
     return (name || '').toString().trim().replace(/\s+/g, ' ');
+  }
+
+  // توحيد "مرن" لاسم الفرع عشان نطابق بين ملفات مختلفة بتكتب نفس الفرع بشكل مختلف شوية (زي
+  // "اسواق فتح الله - الرحاب" مقابل "اسواق فتح الله الرحاب") - بيشيل الشرطات/الشحطات كمان
+  // بالإضافة لتوحيد المسافات، مستخدم بس في مطابقة دليل خطوط سير المناديب.
+  function looseSiteKey(name) {
+    return normItemName(name).replace(/[-_–—]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
   function fmt(n, decimals) {
@@ -1199,6 +1207,52 @@ table.datatable details summary:hover { text-decoration: underline; }
     }
   }
 
+  // يبني دالة مطابقة سريعة لفرع فاتورة -> سطر دليل خطوط سير المناديب (state.repRoutes)، بترتيب:
+  // 1) مطابقة مباشرة (نفس الاسم بعد توحيد المسافات) 2) ربط يدوي محفوظ في السحابة
+  // 3) مطابقة مرنة تلقائية (بتجاهل الشرطات/الشحطات) - مبنية مرة واحدة بس لكل استدعاء عشان الأداء.
+  function buildRepRouteResolver() {
+    const loose = new Map();
+    state.repRoutes.forEach((rr) => {
+      const lk = looseSiteKey(rr.branchName);
+      if (!loose.has(lk)) loose.set(lk, rr); // أول تطابق بس - تعارض نادر جدًا
+    });
+    return function resolveSite(siteRaw) {
+      if (!siteRaw) return null;
+      const key = normItemName(siteRaw);
+      const direct = state.repRoutes.get(key);
+      if (direct) return direct;
+      const manualTarget = state.repRouteSiteLinks.get(key);
+      if (manualTarget) {
+        const viaManual = state.repRoutes.get(normItemName(manualTarget));
+        if (viaManual) return viaManual;
+      }
+      return loose.get(looseSiteKey(siteRaw)) || null;
+    };
+  }
+
+  // ربط يدوي: اسم فرع كما هو مكتوب في الفواتير -> اسم فرع موجود بالفعل في دليل خطوط سير المناديب
+  // (لحل فوارق الكتابة اللي المطابقة المرنة مش بتغطيها، زي اختصار اسم الفرع في ملف عن التاني)
+  async function assignRepRouteSiteLink(siteRaw, branchName) {
+    if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان يتحفظ الربط ده.', 'err'); return false; }
+    const site = normItemName(siteRaw);
+    if (!site) return false;
+    if (!branchName) { logStatus('لازم تختار الفرع الصحيح من الدليل.', 'err'); return false; }
+    try {
+      const { error } = await sb.from('tamr_sales_rep_route_site_links').upsert(
+        [{ site_name: site, branch_name: branchName, updated_at: new Date().toISOString() }],
+        { onConflict: 'site_name' }
+      );
+      if (error) throw error;
+      state.repRouteSiteLinks.set(site, branchName);
+      logStatus(`تم ربط "${site}" بفرع "${branchName}" في دليل خطوط سير المناديب ✓`, 'ok');
+      renderAll();
+      return true;
+    } catch (e) {
+      logStatus('تعذر حفظ الربط: ' + (e.message || e), 'err');
+      return false;
+    }
+  }
+
   async function syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts) {
     if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length) && !(newIndirectDiscounts && newIndirectDiscounts.length))) return;
     try {
@@ -1332,14 +1386,15 @@ table.datatable details summary:hover { text-decoration: underline; }
     if (!client) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
-      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows, repRouteRows] = await Promise.all([
-        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog'), fetchAllRows(client, 'tamr_sales_rep_routes')
+      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows, repRouteRows, repRouteSiteLinkRows] = await Promise.all([
+        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog'), fetchAllRows(client, 'tamr_sales_rep_routes'), fetchAllRows(client, 'tamr_sales_rep_route_site_links')
       ]);
       if (sb !== client) return; // اتعمل تسجيل خروج أثناء التحميل - متجاهلين النتيجة القديمة
       state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
       state.routeCatalog = new Map(routeCatalogRows.map(r => [r.route, { branch: r.branch, type: r.type, region: r.region, sector: r.sector }]));
       state.itemCatalog = new Map(itemCatalogRows.map(r => [normItemName(r.item_name), { code: r.item_code, category: r.category, name: r.item_name }]));
       state.repRoutes = new Map(repRouteRows.map(r => [normItemName(r.branch_name), { route: r.route, group: r.group_name, branchName: r.branch_name }]));
+      state.repRouteSiteLinks = new Map(repRouteSiteLinkRows.map(r => [normItemName(r.site_name), r.branch_name]));
       state.returns = returnRows.map(dbRowToReturn);
       state.indirectDiscounts = indirectRows.map(dbRowToIndirectDiscount);
       state.manualIndirectLinks = new Map(indirectLinkRows.map(r => [r.discount_customer, r.matched_customer]));
@@ -3656,8 +3711,9 @@ function renderRepRoutes() {
 
   const years = activeYears(inv, i => i.__year);
 
-  // ربط كل فاتورة بدليل خطوط سير المناديب عن طريق اسم فرع العميل (بعد تطبيع المسافات)
-  const withRR = inv.map(i => ({ inv: i, rr: state.repRoutes.get(normItemName(i['فرع_العميل'])) }));
+  // ربط كل فاتورة بدليل خطوط سير المناديب: مطابقة مباشرة، وإلا ربط يدوي محفوظ، وإلا مطابقة مرنة تلقائية
+  const resolveSite = buildRepRouteResolver();
+  const withRR = inv.map(i => ({ inv: i, rr: resolveSite(i['فرع_العميل']) }));
   const matched = withRR.filter(x => x.rr);
   const unmatched = withRR.filter(x => !x.rr);
 
@@ -3741,6 +3797,29 @@ function renderRepRoutes() {
   const groupOptionsHtml = allGroups.map(g => `<option value="${escapeHtml(g)}" ${f.group === g ? 'selected' : ''}>${escapeHtml(g)}</option>`).join('');
   const routeOptionsHtml = initialDir.routesForGroup.map(r => `<option value="${escapeHtml(r)}" ${f.route === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('');
 
+  /* ----- ربط فروع الفواتير اللي لسه مش متطابقة (بعد المطابقة المباشرة والمرنة والربط اليدوي السابق) ----- */
+  const unmatchedSummary = groupSum(unmatched, x => x.inv['فرع_العميل'], x => x.inv.__net);
+  unmatchedSummary.sort((a, b) => b.sum - a.sum);
+  const allBranchNames = Array.from(new Set(Array.from(state.repRoutes.values()).map(r => r.branchName))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const branchDatalistHtml = allBranchNames.map(b => `<option value="${escapeHtml(b)}"></option>`).join('');
+  const unmatchedRowsHtml = unmatchedSummary.map(x => `
+    <tr data-site="${escapeHtml(x.key)}">
+      <td>${escapeHtml(x.key)}</td>
+      <td>${fmt(x.count)}</td>
+      <td>${fmtMoney(x.sum)}</td>
+      <td><input type="text" class="rrlink-input" list="rrLinkBranchDatalist" placeholder="اكتب اسم الفرع الصحيح من الدليل..." style="width:230px; font-family:inherit; padding:6px 8px; border-radius:8px; border:1.5px solid var(--sand-dark);"></td>
+      <td><button type="button" class="btn rrlink-save-btn" style="padding:7px 14px; font-size:12.5px;">ربط</button></td>
+    </tr>
+  `).join('');
+  const unmatchedLinkSectionHtml = unmatchedSummary.length ? `
+    <div class="table-title">ربط فروع الفواتير غير المتطابقة (${fmt(unmatchedSummary.length)})</div>
+    <div class="hint" style="margin:0 0 10px;">أسماء فروع موجودة في الفواتير بس مش متطابقة تلقائيًا مع دليل خطوط سير المناديب (فوارق كتابة زي الشرطات أو اختصار الاسم). اختار الفرع الصحيح من الدليل واضغط "ربط" - الربط بيتحفظ دايمًا وهيتطبق تلقائيًا على أي فاتورة جاية بنفس الاسم.</div>
+    <datalist id="rrLinkBranchDatalist">${branchDatalistHtml}</datalist>
+    <div class="table-wrap"><table class="datatable"><thead><tr>
+      <th>اسم الفرع في الفاتورة</th><th>عدد الفواتير</th><th>صافي المبيعات</th><th>الفرع الصحيح بالدليل</th><th></th>
+    </tr></thead><tbody>${unmatchedRowsHtml}</tbody></table></div>
+  ` : '';
+
   el.innerHTML = `
     <div class="table-title">أداء المبيعات حسب المجموعة</div>
     <div class="grid2">
@@ -3773,9 +3852,25 @@ function renderRepRoutes() {
       </div>
     </div>
     <div class="table-wrap" id="rrDirTableWrap">${tableHTML(['اسم الفرع', 'خط السير', 'المجموعة', 'صافي المبيعات (الفترة الحالية)'], initialDir.dirRows, null)}</div>
+
+    ${unmatchedLinkSectionHtml}
   `;
 
   makeChart('chRepRouteGroups', barConfig(byGroup.slice(0, 12).map(x => x.key), byGroup.slice(0, 12).map(x => x.sum), 'صافي المبيعات', true));
+
+  el.querySelectorAll('.rrlink-save-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const tr = btn.closest('tr');
+      const site = tr.dataset.site;
+      const input = tr.querySelector('.rrlink-input');
+      const branchVal = normItemName(input.value);
+      if (!branchVal) { alert('اكتب أو اختار اسم الفرع الصحيح من القائمة الأول.'); return; }
+      const validBranch = allBranchNames.find(b => normItemName(b) === branchVal);
+      if (!validBranch) { alert('لازم تختار اسم فرع موجود بالظبط في قائمة دليل خطوط سير المناديب.'); return; }
+      btn.disabled = true; btn.textContent = 'جاري الحفظ...';
+      await assignRepRouteSiteLink(site, validBranch);
+    });
+  });
 
   function refreshDirTable() {
     const built = computeDir();
