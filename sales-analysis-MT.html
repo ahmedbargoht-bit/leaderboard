@@ -367,6 +367,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <button class="tabbtn" data-tab="panel-branches" data-label="الفروع">الفروع</button>
       <button class="tabbtn" data-tab="panel-customers" data-label="العملاء">العملاء</button>
       <button class="tabbtn" data-tab="panel-reps" data-label="المناديب وخطوط السير">المناديب وخطوط السير</button>
+      <button class="tabbtn" data-tab="panel-reproutes" data-label="خطوط سير مناديب">خطوط سير مناديب</button>
       <button class="tabbtn" data-tab="panel-quarterly" data-label="الأرباع">الأرباع</button>
       <button class="tabbtn" data-tab="panel-monthly" data-label="الشهور">الشهور</button>
       <button class="tabbtn" data-tab="panel-yoy" data-label="مقارنة سنوية">مقارنة سنوية</button>
@@ -385,6 +386,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <div class="tabpanel" id="panel-branches"></div>
       <div class="tabpanel" id="panel-customers"></div>
       <div class="tabpanel" id="panel-reps"></div>
+      <div class="tabpanel" id="panel-reproutes"></div>
       <div class="tabpanel" id="panel-quarterly"></div>
       <div class="tabpanel" id="panel-monthly"></div>
       <div class="tabpanel" id="panel-yoy"></div>
@@ -868,7 +870,9 @@ table.datatable details summary:hover { text-decoration: underline; }
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
     customerItemLookup: { customer: '', site: '', activity: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، activity بيضيّق قائمتي العملاء/الفروع وبيتفلتر بيه النتائج كمان
-    allItemsReport: { lang: 'ar' }  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
+    allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
+    repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
+    repRoutesFilter: { group: '', route: '', search: '' }  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -1302,13 +1306,14 @@ table.datatable details summary:hover { text-decoration: underline; }
     if (!client) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
-      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows] = await Promise.all([
-        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog')
+      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows, repRouteRows] = await Promise.all([
+        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog'), fetchAllRows(client, 'tamr_sales_rep_routes')
       ]);
       if (sb !== client) return; // اتعمل تسجيل خروج أثناء التحميل - متجاهلين النتيجة القديمة
       state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
       state.routeCatalog = new Map(routeCatalogRows.map(r => [r.route, { branch: r.branch, type: r.type, region: r.region, sector: r.sector }]));
       state.itemCatalog = new Map(itemCatalogRows.map(r => [normItemName(r.item_name), { code: r.item_code, category: r.category, name: r.item_name }]));
+      state.repRoutes = new Map(repRouteRows.map(r => [normItemName(r.branch_name), { route: r.route, group: r.group_name, branchName: r.branch_name }]));
       state.returns = returnRows.map(dbRowToReturn);
       state.indirectDiscounts = indirectRows.map(dbRowToIndirectDiscount);
       state.manualIndirectLinks = new Map(indirectLinkRows.map(r => [r.discount_customer, r.matched_customer]));
@@ -2790,6 +2795,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     renderBranches();
     renderCustomers();
     renderReps();
+    renderRepRoutes();
     renderQuarterly();
     renderMonthly();
     renderYoY();
@@ -3610,6 +3616,165 @@ function renderReps() {
     <div class="table-wrap">${tableHTML(routeHeaders, routeRows, routeFooter)}</div>
   `;
   makeChart('chReps', barConfig(byRep.slice(0, 12).map(x => x.key), byRep.slice(0, 12).map(x => x.sum), 'صافي المبيعات', true));
+}
+
+/* ---------------- خطوط سير مناديب (دليل الفروع + أداء المبيعات لكل خط/مجموعة) ---------------- */
+function renderRepRoutes() {
+  const el = document.getElementById('panel-reproutes');
+  if (!el) return;
+  const inv = filteredInvoices();
+  if (!state.repRoutes || !state.repRoutes.size) {
+    el.innerHTML = emptyState('لا يوجد دليل خطوط سير مناديب محفوظ بعد. ارفع ملف "الفروع وخطوط السير" لإضافته.');
+    return;
+  }
+
+  const years = activeYears(inv, i => i.__year);
+
+  // ربط كل فاتورة بدليل خطوط سير المناديب عن طريق اسم فرع العميل (بعد تطبيع المسافات)
+  const withRR = inv.map(i => ({ inv: i, rr: state.repRoutes.get(normItemName(i['فرع_العميل'])) }));
+  const matched = withRR.filter(x => x.rr);
+  const unmatched = withRR.filter(x => !x.rr);
+
+  /* ----- أداء المبيعات حسب المجموعة ----- */
+  const byGroup = groupSum(matched, x => x.rr.group || '(بدون مجموعة)', x => x.inv.__net);
+  byGroup.sort((a, b) => b.sum - a.sum);
+  const groupBmap = yearBreakdownMap(matched, x => x.rr.group || '(بدون مجموعة)', x => x.inv.__year, x => x.inv.__net);
+  const groupHeaders = years.length >= 2
+    ? ['المجموعة', 'عدد الفروع', ...yearColumnHeaders(years)]
+    : ['المجموعة', 'عدد الفروع', 'صافي المبيعات'];
+  const groupRows = byGroup.map(x => {
+    const sites = new Set(matched.filter(m => (m.rr.group || '(بدون مجموعة)') === x.key).map(m => m.rr.branchName)).size;
+    if (years.length >= 2) {
+      return [x.key, fmt(sites), ...yearColumnCells(groupBmap, x.key, years, fmtMoney)];
+    }
+    return [x.key, fmt(sites), fmtMoney(x.sum)];
+  });
+  const groupKeys = byGroup.map(x => x.key);
+  const totalGroupSites = new Set(matched.map(m => m.rr.branchName)).size;
+  const totalGroupNet = byGroup.reduce((s, x) => s + x.sum, 0);
+  const groupFooter = years.length >= 2
+    ? ['الإجمالي', fmt(totalGroupSites), ...yearColumnCells(sumYearTotalsBmap(groupBmap, groupKeys, years), '__TOTAL__', years, fmtMoney)]
+    : ['الإجمالي', fmt(totalGroupSites), fmtMoney(totalGroupNet)];
+
+  /* ----- أداء المبيعات حسب خط السير ----- */
+  const byRoute = groupSum(matched, x => x.rr.route, x => x.inv.__net);
+  byRoute.sort((a, b) => b.sum - a.sum);
+  const routeBmap = yearBreakdownMap(matched, x => x.rr.route, x => x.inv.__year, x => x.inv.__net);
+  const routeHeaders = years.length >= 2
+    ? ['خط السير', 'المجموعة', 'عدد الفروع', ...yearColumnHeaders(years)]
+    : ['خط السير', 'المجموعة', 'عدد الفروع', 'صافي المبيعات'];
+  const routeRows = byRoute.map(x => {
+    const rowsOfRoute = matched.filter(m => m.rr.route === x.key);
+    const sites = new Set(rowsOfRoute.map(m => m.rr.branchName)).size;
+    const group = rowsOfRoute[0] ? (rowsOfRoute[0].rr.group || '') : '';
+    if (years.length >= 2) {
+      return [x.key, group, fmt(sites), ...yearColumnCells(routeBmap, x.key, years, fmtMoney)];
+    }
+    return [x.key, group, fmt(sites), fmtMoney(x.sum)];
+  });
+  const routeKeys = byRoute.map(x => x.key);
+  const totalRouteSites = new Set(matched.map(m => m.rr.branchName)).size;
+  const totalRouteNet = byRoute.reduce((s, x) => s + x.sum, 0);
+  const routeFooter = years.length >= 2
+    ? ['الإجمالي', '-', fmt(totalRouteSites), ...yearColumnCells(sumYearTotalsBmap(routeBmap, routeKeys, years), '__TOTAL__', years, fmtMoney)]
+    : ['الإجمالي', '-', fmt(totalRouteSites), fmtMoney(totalRouteNet)];
+
+  const coveragePct = inv.length ? matched.length / inv.length : 0;
+  const unmatchedSites = new Set(unmatched.map(x => x.inv['فرع_العميل']).filter(Boolean));
+  const warn = unmatched.length > 0
+    ? `<div class="pill-note">⚠ ${fmt(unmatched.length)} فاتورة (${fmtPct(1 - coveragePct)}) لـ ${fmt(unmatchedSites.size)} فرع غير موجودين في دليل "خطوط سير المناديب" الحالي. حدّث ملف "الفروع وخطوط السير" لإضافتهم.</div>`
+    : `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ كل الفواتير تم ربطها بدليل خطوط سير المناديب بنجاح.</div>`;
+
+  /* ----- دليل الفروع (قابل للفلترة بالمجموعة/خط السير/بحث اسم الفرع) ----- */
+  const f = state.repRoutesFilter;
+  const allGroups = Array.from(new Set(Array.from(state.repRoutes.values()).map(r => r.group || '(بدون مجموعة)'))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+
+  const netByBranch = new Map();
+  matched.forEach(m => { netByBranch.set(m.rr.branchName, (netByBranch.get(m.rr.branchName) || 0) + m.inv.__net); });
+
+  function computeDir() {
+    const routesForGroup = Array.from(new Set(Array.from(state.repRoutes.values())
+      .filter(r => !f.group || (r.group || '(بدون مجموعة)') === f.group)
+      .map(r => r.route))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+    let dirEntries = Array.from(state.repRoutes.values());
+    if (f.group) dirEntries = dirEntries.filter(r => (r.group || '(بدون مجموعة)') === f.group);
+    if (f.route) dirEntries = dirEntries.filter(r => r.route === f.route);
+    if (f.search && f.search.trim()) {
+      const q = normItemName(f.search).toLowerCase();
+      dirEntries = dirEntries.filter(r => normItemName(r.branchName).toLowerCase().includes(q));
+    }
+    dirEntries = dirEntries.slice().sort((a, b) => String(a.branchName).localeCompare(String(b.branchName), 'ar'));
+    const dirRows = dirEntries.map(r => [
+      escapeHtml(r.branchName), escapeHtml(r.route), escapeHtml(r.group || '-'),
+      netByBranch.has(r.branchName) ? fmtMoney(netByBranch.get(r.branchName)) : '-'
+    ]);
+    return { routesForGroup, dirEntries, dirRows };
+  }
+
+  const initialDir = computeDir();
+  const groupOptionsHtml = allGroups.map(g => `<option value="${escapeHtml(g)}" ${f.group === g ? 'selected' : ''}>${escapeHtml(g)}</option>`).join('');
+  const routeOptionsHtml = initialDir.routesForGroup.map(r => `<option value="${escapeHtml(r)}" ${f.route === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('');
+
+  el.innerHTML = `
+    <div class="table-title">أداء المبيعات حسب المجموعة</div>
+    <div class="grid2">
+      <div class="chart-box"><canvas id="chRepRouteGroups"></canvas></div>
+      <div class="table-wrap">${tableHTML(groupHeaders, groupRows, groupFooter)}</div>
+    </div>
+    <div class="table-title">أداء المبيعات حسب خط السير</div>
+    ${warn}
+    <div class="table-wrap">${tableHTML(routeHeaders, routeRows, routeFooter)}</div>
+
+    <div class="table-title">دليل الفروع وخطوط السير (<span id="rrDirCount">${fmt(initialDir.dirEntries.length)} من ${fmt(state.repRoutes.size)}</span>)</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px;">
+      <div>
+        <div class="hint" style="margin:0 0 4px;">المجموعة</div>
+        <select id="rrGroupSelect" style="min-width:150px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <option value="">-- كل المجموعات --</option>
+          ${groupOptionsHtml}
+        </select>
+      </div>
+      <div>
+        <div class="hint" style="margin:0 0 4px;">خط السير</div>
+        <select id="rrRouteSelect" style="min-width:150px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <option value="">-- كل خطوط السير --</option>
+          ${routeOptionsHtml}
+        </select>
+      </div>
+      <div>
+        <div class="hint" style="margin:0 0 4px;">بحث باسم الفرع</div>
+        <input type="text" id="rrSearchInput" placeholder="اكتب اسم الفرع..." value="${escapeHtml(f.search || '')}" style="width:220px; font-family:inherit; padding:7px 9px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+      </div>
+    </div>
+    <div class="table-wrap" id="rrDirTableWrap">${tableHTML(['اسم الفرع', 'خط السير', 'المجموعة', 'صافي المبيعات (الفترة الحالية)'], initialDir.dirRows, null)}</div>
+  `;
+
+  makeChart('chRepRouteGroups', barConfig(byGroup.slice(0, 12).map(x => x.key), byGroup.slice(0, 12).map(x => x.sum), 'صافي المبيعات', true));
+
+  function refreshDirTable() {
+    const built = computeDir();
+    const wrap = document.getElementById('rrDirTableWrap');
+    if (wrap) wrap.innerHTML = tableHTML(['اسم الفرع', 'خط السير', 'المجموعة', 'صافي المبيعات (الفترة الحالية)'], built.dirRows, null);
+    const countEl = document.getElementById('rrDirCount');
+    if (countEl) countEl.textContent = `${fmt(built.dirEntries.length)} من ${fmt(state.repRoutes.size)}`;
+  }
+
+  const groupSelect = document.getElementById('rrGroupSelect');
+  const routeSelect = document.getElementById('rrRouteSelect');
+  const searchInput = document.getElementById('rrSearchInput');
+  if (groupSelect) groupSelect.addEventListener('change', () => {
+    f.group = groupSelect.value;
+    f.route = ''; // إعادة ضبط خط السير لأن قائمة خطوط السير المتاحة بتتغير مع المجموعة
+    renderRepRoutes();
+  });
+  if (routeSelect) routeSelect.addEventListener('change', () => {
+    f.route = routeSelect.value;
+    refreshDirTable();
+  });
+  if (searchInput) searchInput.addEventListener('input', () => {
+    f.search = searchInput.value;
+    refreshDirTable();
+  });
 }
 
 /* ---------------- الأرباع ---------------- */
