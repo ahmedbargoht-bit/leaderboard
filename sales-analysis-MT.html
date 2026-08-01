@@ -1238,15 +1238,25 @@ table.datatable details summary:hover { text-decoration: underline; }
   }
 
   // بيجيب كل صفوف الجدول صفحة صفحة (1000 سطر/صفحة - نفس الحد الأقصى المضمون شغال مع السحابة).
-  // بدل ما ننتظر كل صفحة لحالها بالتتابع (بطيء جدًا مع جداول فيها عشرات الآلاف من الصفوف زي الأصناف)،
-  // بنستخرج العدد الكلي أول حاجة وبعدين بنطلب الصفحات مع بعض على دفعات متوازية محدودة - نفس البيانات
-  // بالظبط وبنفس الترتيب، بس بوقت أقل بكتير. مهم جدًا: أي فشل في الطريقة السريعة دي (تايم أوت، تزاحم
-  // على السحابة، ...) بيرجع تلقائيًا للطريقة القديمة المتتابعة (المضمونة 100%) عشان التحميل ميفشلش
-  // خالص أبدًا - أسوأ حالة ممكنة هي إنه يرجع بنفس سرعة الأول، مش إنه يقف.
+  // الطريقة السريعة الأساسية: ترقيم صفحات بالـ "keyset" (WHERE id >= مؤشر ORDER BY id LIMIT)
+  // بدل الـ OFFSET التقليدي. OFFSET بيخلي بوستجرس يفحص/يتخطى كل الصفوف اللي قبل الصفحة في كل
+  // مرة - مع جدول زي الأصناف اللي بقى +90 ألف سطر ده بياخد ثواني طويلة للصفحات المتأخرة (وده كان
+  // السبب الرئيسي في "canceling statement due to statement timeout"). بالـ keyset كل صفحة بتستخدم
+  // فهرس الـ id مباشرة بغض النظر عن عمقها في الجدول (~10-15 مللي ثانية بدل ثواني). بنقسم مدى الـ id
+  // على عدد الدفعات المتوازية ونجيب كل نطاق بالتتابع جواه. أي فشل في الطريقة دي (تايم أوت، تزاحم على
+  // السحابة، جدول من غير عمود id...) بيرجع تلقائيًا للطريقة القديمة بالـ OFFSET (أبطأ لكن مضمونة)
+  // عشان التحميل ميفشلش خالص أبدًا.
+  const FETCH_ORDER_COL = { tamr_sales_indirect_links: null }; // الجداول من غير عمود id (مفتاحها composite)
+  function fetchOrderCol(table) {
+    return FETCH_ORDER_COL.hasOwnProperty(table) ? FETCH_ORDER_COL[table] : 'id';
+  }
+
   async function fetchAllRows(client, table) {
     const pageSize = 1000;
     const CONCURRENCY = 3; // متحفظين في العدد عشان منزودش الضغط على السحابة ونسبب تايم أوت
+    const orderCol = fetchOrderCol(table);
 
+    // الطريقة القديمة المضمونة (OFFSET تتابعي) - شبكة أمان أخيرة بس
     const fetchSequential = async () => {
       let from = 0, all = [];
       while (true) {
@@ -1259,40 +1269,56 @@ table.datatable details summary:hover { text-decoration: underline; }
       return all;
     };
 
-    const fetchPageWithRetry = async (i) => {
-      const from = i * pageSize, to = from + pageSize - 1;
-      let lastErr;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const { data, error } = await client.from(table).select('*').range(from, to);
-        if (!error) return data || [];
-        lastErr = error;
-        await new Promise(r => setTimeout(r, 400 * (attempt + 1))); // مهلة صغيرة متزايدة قبل إعادة المحاولة
+    if (!orderCol) return fetchSequential(); // مفيش عمود id نرتب بيه - نروح على القديمة مباشرة
+
+    // يجيب صفحات نطاق [start, end) بترقيم keyset تتابعي (كل صفحة تبدأ من آخر id في اللي قبلها)
+    const fetchRangeKeyset = async (start, end) => {
+      let cursor = start, all = [];
+      while (cursor < end) {
+        let data = null, lastErr;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const res = await client.from(table).select('*')
+            .gte(orderCol, cursor).lt(orderCol, end)
+            .order(orderCol, { ascending: true }).limit(pageSize);
+          if (!res.error) { data = res.data || []; break; }
+          lastErr = res.error;
+          await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+        }
+        if (data === null) throw lastErr;
+        all = all.concat(data);
+        if (data.length < pageSize) break;
+        cursor = data[data.length - 1][orderCol] + 1;
       }
-      throw lastErr;
+      return all;
     };
 
-    const fetchParallel = async () => {
-      const { count, error: countErr } = await client.from(table).select('*', { count: 'exact', head: true });
-      if (countErr) throw countErr;
-      const total = typeof count === 'number' ? count : null;
-      if (total === null) throw new Error('تعذر حساب عدد الصفوف');
-      if (!total) return [];
+    const fetchKeysetParallel = async () => {
+      // أقل/أعلى قيمة id بفهرس فقط (ORDER BY + LIMIT 1) - سريع جدًا حتى لو فيه فجوات كتير في الأرقام
+      const [{ data: minRows, error: e1 }, { data: maxRows, error: e2 }] = await Promise.all([
+        client.from(table).select(orderCol).order(orderCol, { ascending: true }).limit(1),
+        client.from(table).select(orderCol).order(orderCol, { ascending: false }).limit(1),
+      ]);
+      if (e1) throw e1;
+      if (e2) throw e2;
+      if (!minRows || !minRows.length) return []; // جدول فاضي
+      const min = minRows[0][orderCol], max = maxRows[0][orderCol];
 
-      const pageCount = Math.ceil(total / pageSize);
-      const results = new Array(pageCount);
-      let nextPage = 0;
-      async function worker() {
-        while (nextPage < pageCount) {
-          const i = nextPage++;
-          results[i] = await fetchPageWithRetry(i);
-        }
+      const bucketCount = Math.max(1, CONCURRENCY);
+      const span = max - min + 1;
+      const bucketSize = Math.max(1, Math.ceil(span / bucketCount));
+      const buckets = [];
+      for (let i = 0; i < bucketCount; i++) {
+        const start = min + i * bucketSize;
+        if (start > max) break;
+        const end = i === bucketCount - 1 ? max + 1 : Math.min(max + 1, min + (i + 1) * bucketSize);
+        buckets.push({ start, end });
       }
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pageCount) }, () => worker()));
+      const results = await Promise.all(buckets.map(b => fetchRangeKeyset(b.start, b.end)));
       return results.flat();
     };
 
     try {
-      return await fetchParallel();
+      return await fetchKeysetParallel();
     } catch (e) {
       // أي مشكلة في الطريقة السريعة - نرجع فورًا للطريقة القديمة المضمونة بدل ما نوقف التحميل خالص
       return fetchSequential();
