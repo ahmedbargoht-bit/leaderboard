@@ -869,7 +869,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
-    customerItemLookup: { customer: '', site: '', activity: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، activity بيضيّق قائمتي العملاء/الفروع وبيتفلتر بيه النتائج كمان
+    customerItemLookup: { customer: '', site: '', siteFilter: '', activity: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، siteFilter = فرع مختار من ضمن فروع العميل المختار (pills)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان
     allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
     repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
     repRoutesFilter: { group: '', route: '', search: '' },  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
@@ -2228,12 +2228,14 @@ table.datatable details summary:hover { text-decoration: underline; }
     const lang = lk.lang || 'ar';
     const t = CUST_REPORT_I18N[lang] || CUST_REPORT_I18N.ar;
 
-    const lkRows = state.itemRows.filter(r =>
+    const baseRows = state.itemRows.filter(r =>
       (lk.site ? r.site === lk.site : r.customer === lk.customer) &&
       (!lk.activity || r.activity === lk.activity) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
+    const custSites = (!lk.site && lk.customer) ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))) : [];
+    const lkRows = (custSites.length && lk.siteFilter) ? baseRows.filter(r => r.site === lk.siteFilter) : baseRows;
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
 
     const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
@@ -2266,6 +2268,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <div class="table-title">${t.reportTitle}</div>
       <div class="hint" style="font-size:13px; margin-bottom:10px;">
         <b>${targetLabel}:</b> ${escapeHtml(targetValue)} &nbsp;|&nbsp;
+        ${(!lk.site && lk.siteFilter) ? `<b>${t.branchName}:</b> ${escapeHtml(lk.siteFilter)} &nbsp;|&nbsp;` : ''}
         ${lk.activity ? `<b>${t.activityLabel}:</b> ${escapeHtml(lk.activity)} &nbsp;|&nbsp;` : ''}
         <b>${t.period}:</b> ${escapeHtml(periodLabel)} &nbsp;|&nbsp;
         <b>${t.branchCount}:</b> ${fmt(sites.size)} &nbsp;|&nbsp;
@@ -2293,12 +2296,14 @@ table.datatable details summary:hover { text-decoration: underline; }
     const lk = state.customerItemLookup;
     if (!lk.customer && !lk.site) { alert('اختار عميل أو فرع من القائمة الأول.'); return; }
 
-    const lkRows = state.itemRows.filter(r =>
+    const baseRows = state.itemRows.filter(r =>
       (lk.site ? r.site === lk.site : r.customer === lk.customer) &&
       (!lk.activity || r.activity === lk.activity) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
+    const custSites = (!lk.site && lk.customer) ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))) : [];
+    const lkRows = (custSites.length && lk.siteFilter) ? baseRows.filter(r => r.site === lk.siteFilter) : baseRows;
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
 
     const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
@@ -2340,7 +2345,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     ws.mergeCells('B3:G3');
     const infoCell = ws.getCell('B3');
     const now = new Date();
-    infoCell.value = `${targetLabel}: ${targetValue}${lk.activity ? ' | النشاط: ' + lk.activity : ''} | الفترة: ${periodLabel} | تاريخ التصدير: ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    infoCell.value = `${targetLabel}: ${targetValue}${(!lk.site && lk.siteFilter) ? ' | الفرع: ' + lk.siteFilter : ''}${lk.activity ? ' | النشاط: ' + lk.activity : ''} | الفترة: ${periodLabel} | تاريخ التصدير: ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
     infoCell.font = { size: 11, color: { argb: 'FF6B5647' } };
     infoCell.alignment = { horizontal: 'center' };
 
@@ -3383,32 +3388,52 @@ function renderItems() {
     if (!resultEl) return;
     const lk = state.customerItemLookup;
     if (!lk.customer && !lk.site) { resultEl.innerHTML = '<div class="pill-note">اختار عميل أو دور على فرع بالاسم من فوق الأول.</div>'; return; }
-    const lkRows = state.itemRows.filter(r =>
+    const baseRows = state.itemRows.filter(r =>
       (lk.site ? r.site === lk.site : r.customer === lk.customer) &&
       (!lk.activity || r.activity === lk.activity) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
-    if (!lkRows.length) { resultEl.innerHTML = '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>'; return; }
-    const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
-    const custQtyOf = new Map();
-    lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
-    const lastPriceOf = lastPiecePriceMap(lkRows);
-    const lkTableRows = byItemCust.map(x => {
-      const lp = lastPriceOf.get(x.key);
-      return [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmt(x.count)];
+    // لو اخترنا عميل (مش فرع بالبحث المباشر)، نجيب كل الفروع التابعة له عشان نعرضها كأزرار فلترة
+    const custSites = (!lk.site && lk.customer) ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar')) : [];
+    const pillsHtml = custSites.length > 1 ? `
+      <div class="hint" style="margin:0 0 6px;">فروع هذا العميل (${fmt(custSites.length)}) - دوس على فرع لعرض بياناته لوحده:</div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px;">
+        <button type="button" class="btn secondary cust-site-pill" data-site="" style="padding:5px 12px; font-size:12px; ${!lk.siteFilter ? 'background:var(--ink); color:var(--sand); border-color:var(--ink);' : ''}">كل الفروع</button>
+        ${custSites.map(s => `<button type="button" class="btn secondary cust-site-pill" data-site="${escapeHtml(s)}" style="padding:5px 12px; font-size:12px; ${lk.siteFilter === s ? 'background:var(--ink); color:var(--sand); border-color:var(--ink);' : ''}">${escapeHtml(s)}</button>`).join('')}
+      </div>
+    ` : '';
+    const lkRows = (custSites.length && lk.siteFilter) ? baseRows.filter(r => r.site === lk.siteFilter) : baseRows;
+    if (!lkRows.length) {
+      resultEl.innerHTML = pillsHtml + '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>';
+    } else {
+      const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
+      const custQtyOf = new Map();
+      lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+      const lastPriceOf = lastPiecePriceMap(lkRows);
+      const lkTableRows = byItemCust.map(x => {
+        const lp = lastPriceOf.get(x.key);
+        return [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmt(x.count)];
+      });
+      const lkTotalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
+      const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
+      const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
+      const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), '-', fmtMoney(lkTotalSum), fmt(lkTotalCount)];
+      const targetLabel = lk.site ? 'الفرع' : 'العميل';
+      const targetName = lk.site ? lk.site : lk.customer;
+      const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
+      const branchNote = lk.siteFilter ? ` - فرع: ${escapeHtml(lk.siteFilter)}` : '';
+      resultEl.innerHTML = pillsHtml + `
+        <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}"${branchNote} في الفترة دي${activityNote}</div>
+        <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
+      `;
+    }
+    resultEl.querySelectorAll('.cust-site-pill').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.customerItemLookup.siteFilter = btn.dataset.site || '';
+        renderCustLookupResult();
+      });
     });
-    const lkTotalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
-    const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
-    const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
-    const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), '-', fmtMoney(lkTotalSum), fmt(lkTotalCount)];
-    const targetLabel = lk.site ? 'الفرع' : 'العميل';
-    const targetName = lk.site ? lk.site : lk.customer;
-    const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
-    resultEl.innerHTML = `
-      <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}" في الفترة دي${activityNote}</div>
-      <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
-    `;
     resultEl.querySelectorAll('.item-code-save-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const wrap = btn.closest('.item-code-missing');
@@ -3427,6 +3452,7 @@ function renderItems() {
       state.customerItemLookup.activity = custActivitySelect.value;
       state.customerItemLookup.customer = '';
       state.customerItemLookup.site = '';
+      state.customerItemLookup.siteFilter = '';
       renderItems();
     });
   }
@@ -3434,6 +3460,7 @@ function renderItems() {
   if (custSelect) {
     custSelect.addEventListener('change', () => {
       state.customerItemLookup.customer = custSelect.value;
+      state.customerItemLookup.siteFilter = '';
       if (custSelect.value) {
         state.customerItemLookup.site = '';
         const siteInput = el.querySelector('#custLookupSiteInput');
@@ -3453,6 +3480,7 @@ function renderItems() {
       if (sitesForLookup.includes(val)) {
         state.customerItemLookup.site = val;
         state.customerItemLookup.customer = '';
+        state.customerItemLookup.siteFilter = '';
         const custSelectEl = el.querySelector('#custLookupSelect');
         if (custSelectEl) custSelectEl.value = '';
         renderCustLookupResult();
