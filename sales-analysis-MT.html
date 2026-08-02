@@ -3393,17 +3393,21 @@ function renderItems() {
     const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
     lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
-    const lkTableRows = byItemCust.map(x => [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), fmtMoney(x.sum), fmt(x.count)]);
+    const lastPriceOf = lastPiecePriceMap(lkRows);
+    const lkTableRows = byItemCust.map(x => {
+      const lp = lastPriceOf.get(x.key);
+      return [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmt(x.count)];
+    });
     const lkTotalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
     const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
     const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
-    const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), fmtMoney(lkTotalSum), fmt(lkTotalCount)];
+    const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), '-', fmtMoney(lkTotalSum), fmt(lkTotalCount)];
     const targetLabel = lk.site ? 'الفرع' : 'العميل';
     const targetName = lk.site ? lk.site : lk.customer;
     const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
     resultEl.innerHTML = `
       <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}" في الفترة دي${activityNote}</div>
-      <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
+      <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
     `;
     resultEl.querySelectorAll('.item-code-save-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
