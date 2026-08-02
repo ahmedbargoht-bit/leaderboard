@@ -3394,18 +3394,21 @@ function renderItems() {
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
-    // لو اخترنا عميل (مش فرع بالبحث المباشر)، نجيب كل الفروع التابعة له عشان نعرضها كأزرار فلترة
+    // لو اخترنا عميل (مش فرع بالبحث المباشر)، نجيب كل الفروع التابعة له عشان نعرضها في قائمة بحث
     const custSites = (!lk.site && lk.customer) ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar')) : [];
-    const pillsHtml = custSites.length > 1 ? `
-      <div class="hint" style="margin:0 0 6px;">فروع هذا العميل (${fmt(custSites.length)}) - دوس على فرع لعرض بياناته لوحده:</div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px;">
-        <button type="button" class="btn secondary cust-site-pill" data-site="" style="padding:5px 12px; font-size:12px; ${!lk.siteFilter ? 'background:var(--ink); color:var(--sand); border-color:var(--ink);' : ''}">كل الفروع</button>
-        ${custSites.map(s => `<button type="button" class="btn secondary cust-site-pill" data-site="${escapeHtml(s)}" style="padding:5px 12px; font-size:12px; ${lk.siteFilter === s ? 'background:var(--ink); color:var(--sand); border-color:var(--ink);' : ''}">${escapeHtml(s)}</button>`).join('')}
+    const branchFilterHtml = custSites.length > 1 ? `
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+        <div class="hint" style="margin:0;">دور على فرع من فروع هذا العميل (${fmt(custSites.length)}):</div>
+        <input type="text" class="cust-branch-filter-input" list="custBranchFilterDatalist" placeholder="اكتب اسم الفرع أو سيبه فاضي لعرض كل الفروع..." autocomplete="off"
+          value="${escapeHtml(lk.siteFilter || '')}"
+          style="min-width:240px; font-family:inherit; padding:6px 10px; border-radius:8px; border:1.5px solid var(--sand-dark); font-size:12.5px;">
+        <datalist id="custBranchFilterDatalist">${custSites.map(s => `<option value="${escapeHtml(s)}"></option>`).join('')}</datalist>
+        ${lk.siteFilter ? `<button type="button" class="btn secondary cust-branch-clear-btn" style="padding:4px 10px; font-size:11.5px;">✕ عرض كل الفروع</button>` : ''}
       </div>
     ` : '';
     const lkRows = (custSites.length && lk.siteFilter) ? baseRows.filter(r => r.site === lk.siteFilter) : baseRows;
     if (!lkRows.length) {
-      resultEl.innerHTML = pillsHtml + '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>';
+      resultEl.innerHTML = branchFilterHtml + '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>';
     } else {
       const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
       const custQtyOf = new Map();
@@ -3423,17 +3426,32 @@ function renderItems() {
       const targetName = lk.site ? lk.site : lk.customer;
       const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
       const branchNote = lk.siteFilter ? ` - فرع: ${escapeHtml(lk.siteFilter)}` : '';
-      resultEl.innerHTML = pillsHtml + `
+      resultEl.innerHTML = branchFilterHtml + `
         <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}"${branchNote} في الفترة دي${activityNote}</div>
         <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
       `;
     }
-    resultEl.querySelectorAll('.cust-site-pill').forEach(btn => {
-      btn.addEventListener('click', () => {
-        state.customerItemLookup.siteFilter = btn.dataset.site || '';
+    const branchFilterInput = resultEl.querySelector('.cust-branch-filter-input');
+    if (branchFilterInput) {
+      branchFilterInput.addEventListener('input', () => {
+        const val = branchFilterInput.value.trim();
+        if (!val) {
+          if (state.customerItemLookup.siteFilter) { state.customerItemLookup.siteFilter = ''; renderCustLookupResult(); }
+          return;
+        }
+        if (custSites.includes(val)) {
+          state.customerItemLookup.siteFilter = val;
+          renderCustLookupResult();
+        }
+      });
+    }
+    const branchClearBtn = resultEl.querySelector('.cust-branch-clear-btn');
+    if (branchClearBtn) {
+      branchClearBtn.addEventListener('click', () => {
+        state.customerItemLookup.siteFilter = '';
         renderCustLookupResult();
       });
-    });
+    }
     resultEl.querySelectorAll('.item-code-save-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const wrap = btn.closest('.item-code-missing');
