@@ -1895,6 +1895,19 @@ table.datatable details summary:hover { text-decoration: underline; }
     return rows;
   }
 
+  // يرجع Map: اسم الصنف -> سعر القطعة (عمود "سعر_ف" الأصلي) من آخر فاتورة بالتاريخ لهذا الصنف
+  // داخل مجموعة الصفوف المعطاة (مستخدمة في أداة "أصناف عميل معين خلال فترة معينة" - طباعة/تصدير/عرض).
+  // بيتجاهل الصفوف من غير تاريخ صالح لو فيه صف تاني بتاريخ صالح لنفس الصنف.
+  function lastPiecePriceMap(rows) {
+    const byItem = new Map();
+    rows.forEach(r => {
+      if (!r.date) return;
+      const cur = byItem.get(r.item);
+      if (!cur || r.date > cur.date) byItem.set(r.item, { date: r.date, price: r.pricePiece || 0 });
+    });
+    return byItem;
+  }
+
   /* ---------------- Filters (multi-select checkboxes) ---------------- */
   // القيم المتاحة لكل مفتاح فلتر - دالة مستقلة عشان تتعاد بسهولة من أي مكان (الشريط العلوي أو أي تاب
   // عنده نسخة محلية من نفس الفلتر، زي تاب "توزيع الخصم على الفروع").
@@ -2169,6 +2182,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'كل الفترة المتاحة', allYears: 'كل السنوات', allMonths: 'كل الشهور',
       branchCount: 'عدد الفروع', itemCount: 'عدد الأصناف الموردة',
       itemCode: 'كود الصنف', item: 'الصنف', category: 'التصنيف', qty: 'الكمية', value: 'القيمة',
+      pieceUnitPrice: 'سعر القطعة (آخر توريد)',
       pctOfTotal: 'نسبة من إجمالي مبيعات العميل', total: 'الإجمالي',
       sigSales: 'مدير مبيعات مودرن تريد', sigGM: 'مدير عام المبيعات', sigLine: 'الاسم / التوقيع / التاريخ',
       months: ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
@@ -2178,6 +2192,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'All available period', allYears: 'All years', allMonths: 'All months',
       branchCount: 'Number of Branches', itemCount: 'Number of Items Supplied',
       itemCode: 'Item Code', item: 'Item', category: 'Category', qty: 'Quantity', value: 'Value',
+      pieceUnitPrice: 'Unit Price (Last Delivery)',
       pctOfTotal: '% of Customer Total Sales', total: 'Total',
       sigSales: 'Modern Trade Sales Manager', sigGM: 'General Sales Manager', sigLine: 'Name / Signature / Date',
       months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -2187,6 +2202,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Toute la période disponible', allYears: 'Toutes les années', allMonths: 'Tous les mois',
       branchCount: 'Nombre de succursales', itemCount: "Nombre d'articles fournis",
       itemCode: "Code d'article", item: 'Article', category: 'Catégorie', qty: 'Quantité', value: 'Valeur',
+      pieceUnitPrice: 'Prix unitaire (dernière livraison)',
       pctOfTotal: '% du total des ventes du client', total: 'Total',
       sigSales: 'Directeur des ventes Modern Trade', sigGM: 'Directeur général des ventes', sigLine: 'Nom / Signature / Date',
       months: ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
@@ -2196,6 +2212,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Gesamter verfügbarer Zeitraum', allYears: 'Alle Jahre', allMonths: 'Alle Monate',
       branchCount: 'Anzahl der Filialen', itemCount: 'Anzahl der gelieferten Artikel',
       itemCode: 'Artikelcode', item: 'Artikel', category: 'Kategorie', qty: 'Menge', value: 'Wert',
+      pieceUnitPrice: 'Stückpreis (letzte Lieferung)',
       pctOfTotal: '% des Gesamtumsatzes des Kunden', total: 'Gesamt',
       sigSales: 'Verkaufsleiter Modern Trade', sigGM: 'Generalverkaufsleiter', sigLine: 'Name / Unterschrift / Datum',
       months: ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember']
@@ -2222,6 +2239,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
     lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+    const lastPriceOf = lastPiecePriceMap(lkRows);
     const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
     const totalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
     const sites = new Set(lkRows.map(r => r.site).filter(Boolean));
@@ -2233,12 +2251,13 @@ table.datatable details summary:hover { text-decoration: underline; }
     const targetLabel = lk.site ? t.branchName : t.customer;
     const targetValue = lk.site ? lk.site : lk.customer;
 
-    const headers = [t.itemCode, t.item, t.category, t.qty, t.value, t.pctOfTotal];
+    const headers = [t.itemCode, t.item, t.category, t.qty, t.pieceUnitPrice, t.value, t.pctOfTotal];
     const rows = byItemCust.map(x => {
       const pct = totalSum ? x.sum / totalSum : 0;
-      return [resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', fmt(custQtyOf.get(x.key) || 0), fmtMoney(x.sum), fmtPct(pct)];
+      const lp = lastPriceOf.get(x.key);
+      return [resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmtPct(pct)];
     });
-    const footer = ['-', t.total, '-', fmt(totalQty), fmtMoney(totalSum), fmtPct(1)];
+    const footer = ['-', t.total, '-', fmt(totalQty), '-', fmtMoney(totalSum), fmtPct(1)];
 
     const printArea = document.getElementById('custLookupPrintWrap');
     if (!printArea) return;
@@ -2285,6 +2304,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
     lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+    const lastPriceOf = lastPiecePriceMap(lkRows);
     const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
     const totalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
 
@@ -2311,13 +2331,13 @@ table.datatable details summary:hover { text-decoration: underline; }
       }
     } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
 
-    ws.mergeCells('B1:F2');
+    ws.mergeCells('B1:G2');
     const titleCell = ws.getCell('B1');
     titleCell.value = 'نظام تحليل مبيعات تمور الطحان - أصناف ' + targetLabel + ' ' + targetValue;
     titleCell.font = { bold: true, size: 15, color: { argb: INK } };
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    ws.mergeCells('B3:F3');
+    ws.mergeCells('B3:G3');
     const infoCell = ws.getCell('B3');
     const now = new Date();
     infoCell.value = `${targetLabel}: ${targetValue}${lk.activity ? ' | النشاط: ' + lk.activity : ''} | الفترة: ${periodLabel} | تاريخ التصدير: ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
@@ -2326,7 +2346,7 @@ table.datatable details summary:hover { text-decoration: underline; }
 
     ws.addRow([]);
 
-    const headers = ['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'القيمة', 'نسبة من الإجمالي'];
+    const headers = ['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'نسبة من الإجمالي'];
     const headerRow = ws.addRow(headers);
     headerRow.eachCell(cell => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
@@ -2338,38 +2358,41 @@ table.datatable details summary:hover { text-decoration: underline; }
 
     byItemCust.forEach((x, idx) => {
       const pct = totalSum ? x.sum / totalSum : 0;
-      const row = ws.addRow([resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', custQtyOf.get(x.key) || 0, x.sum, pct]);
+      const lp = lastPriceOf.get(x.key);
+      const row = ws.addRow([resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', custQtyOf.get(x.key) || 0, lp ? lp.price : null, x.sum, pct]);
       if (idx % 2 === 1) {
         row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
       }
       row.getCell(4).numFmt = '#,##0';
-      row.getCell(5).numFmt = '#,##0';
-      row.getCell(6).numFmt = '0.0%';
+      row.getCell(5).numFmt = '#,##0.00';
+      row.getCell(6).numFmt = '#,##0';
+      row.getCell(7).numFmt = '0.0%';
       row.getCell(2).alignment = { horizontal: 'right' };
     });
 
-    const footerRow = ws.addRow(['-', 'الإجمالي', '-', totalQty, totalSum, 1]);
+    const footerRow = ws.addRow(['-', 'الإجمالي', '-', totalQty, null, totalSum, 1]);
     footerRow.eachCell(cell => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
       cell.font = { bold: true, color: { argb: INK } };
       cell.border = { top: { style: 'medium', color: { argb: INK } } };
     });
     footerRow.getCell(4).numFmt = '#,##0';
-    footerRow.getCell(5).numFmt = '#,##0';
-    footerRow.getCell(6).numFmt = '0.0%';
+    footerRow.getCell(6).numFmt = '#,##0';
+    footerRow.getCell(7).numFmt = '0.0%';
 
     ws.getColumn(1).width = 14;
     ws.getColumn(2).width = 42;
     ws.getColumn(3).width = 20;
     ws.getColumn(4).width = 14;
-    ws.getColumn(5).width = 16;
+    ws.getColumn(5).width = 20;
     ws.getColumn(6).width = 16;
+    ws.getColumn(7).width = 16;
 
     ws.addRow([]); ws.addRow([]);
-    const sigLabelRow = ws.addRow(['', 'مدير مبيعات مودرن تريد', '', '', 'مدير عام المبيعات', '']);
+    const sigLabelRow = ws.addRow(['', 'مدير مبيعات مودرن تريد', '', '', '', 'مدير عام المبيعات', '']);
     sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
     ws.addRow([]);
-    const sigLineRow = ws.addRow(['', '____________________', '', '', '____________________', '']);
+    const sigLineRow = ws.addRow(['', '____________________', '', '', '', '____________________', '']);
     sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
 
     const buf = await wb.xlsx.writeBuffer();
