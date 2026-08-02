@@ -2266,6 +2266,124 @@ table.datatable details summary:hover { text-decoration: underline; }
     setTimeout(cleanup, 30000);
   };
 
+  // تصدير Excel ملون بشعار الشركة وتوقيعات لنفس بيانات "أصناف عميل معين خلال فترة معينة" -
+  // جنب زرار طباعة PDF بالظبط، نفس نطاق الفلترة (عميل/فرع + نشاط + سنوات + شهور)، مع عمود إضافي
+  // بنسبة كل صنف من إجمالي مبيعات العميل/الفرع ده في الفترة دي.
+  window.exportCustomerItemsExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    const lk = state.customerItemLookup;
+    if (!lk.customer && !lk.site) { alert('اختار عميل أو فرع من القائمة الأول.'); return; }
+
+    const lkRows = state.itemRows.filter(r =>
+      (lk.site ? r.site === lk.site : r.customer === lk.customer) &&
+      (!lk.activity || r.activity === lk.activity) &&
+      (!lk.years.length || lk.years.includes(String(r.year))) &&
+      (!lk.months.length || lk.months.includes(String(r.monthNum)))
+    );
+    if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
+
+    const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
+    const custQtyOf = new Map();
+    lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+    const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
+    const totalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
+
+    const targetLabel = lk.site ? 'الفرع' : 'العميل';
+    const targetValue = lk.site ? lk.site : lk.customer;
+    const yearsLabel = lk.years.length ? lk.years.join(', ') : 'كل السنوات';
+    const monthsLabel = lk.months.length ? lk.months.map(m => MONTH_NAMES_AR[Number(m) - 1] || m).join(', ') : 'كل الشهور';
+    const periodLabel = (!lk.years.length && !lk.months.length) ? 'كل الفترة المتاحة' : (yearsLabel + ' - ' + monthsLabel);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const ws = wb.addWorksheet('أصناف العميل', { views: [{ rightToLeft: true }] });
+
+    const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
+
+    try {
+      const logoEl = document.querySelector('img.logo');
+      const src = logoEl ? logoEl.getAttribute('src') : '';
+      if (src && src.indexOf('base64,') > -1) {
+        const base64 = src.split('base64,')[1];
+        const imgId = wb.addImage({ base64, extension: 'png' });
+        ws.addImage(imgId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 64, height: 64 } });
+      }
+    } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
+
+    ws.mergeCells('B1:F2');
+    const titleCell = ws.getCell('B1');
+    titleCell.value = 'نظام تحليل مبيعات تمور الطحان - أصناف ' + targetLabel + ' ' + targetValue;
+    titleCell.font = { bold: true, size: 15, color: { argb: INK } };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    ws.mergeCells('B3:F3');
+    const infoCell = ws.getCell('B3');
+    const now = new Date();
+    infoCell.value = `${targetLabel}: ${targetValue}${lk.activity ? ' | النشاط: ' + lk.activity : ''} | الفترة: ${periodLabel} | تاريخ التصدير: ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    infoCell.font = { size: 11, color: { argb: 'FF6B5647' } };
+    infoCell.alignment = { horizontal: 'center' };
+
+    ws.addRow([]);
+
+    const headers = ['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'القيمة', 'نسبة من الإجمالي'];
+    const headerRow = ws.addRow(headers);
+    headerRow.eachCell(cell => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+      cell.font = { bold: true, color: { argb: SAND } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+    });
+    headerRow.height = 30;
+
+    byItemCust.forEach((x, idx) => {
+      const pct = totalSum ? x.sum / totalSum : 0;
+      const row = ws.addRow([resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', custQtyOf.get(x.key) || 0, x.sum, pct]);
+      if (idx % 2 === 1) {
+        row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      }
+      row.getCell(4).numFmt = '#,##0';
+      row.getCell(5).numFmt = '#,##0';
+      row.getCell(6).numFmt = '0.0%';
+      row.getCell(2).alignment = { horizontal: 'right' };
+    });
+
+    const footerRow = ws.addRow(['-', 'الإجمالي', '-', totalQty, totalSum, 1]);
+    footerRow.eachCell(cell => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+      cell.font = { bold: true, color: { argb: INK } };
+      cell.border = { top: { style: 'medium', color: { argb: INK } } };
+    });
+    footerRow.getCell(4).numFmt = '#,##0';
+    footerRow.getCell(5).numFmt = '#,##0';
+    footerRow.getCell(6).numFmt = '0.0%';
+
+    ws.getColumn(1).width = 14;
+    ws.getColumn(2).width = 42;
+    ws.getColumn(3).width = 20;
+    ws.getColumn(4).width = 14;
+    ws.getColumn(5).width = 16;
+    ws.getColumn(6).width = 16;
+
+    ws.addRow([]); ws.addRow([]);
+    const sigLabelRow = ws.addRow(['', 'مدير مبيعات مودرن تريد', '', '', 'مدير عام المبيعات', '']);
+    sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
+    ws.addRow([]);
+    const sigLineRow = ws.addRow(['', '____________________', '', '', '____________________', '']);
+    sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeTarget = String(targetValue).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+    const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    a.download = 'أصناف_' + safeTarget + '_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   // قاموس ترجمة تسميات "تقرير كل الأصناف الشامل" (زرار منفصل تمامًا عن أزرار طباعة/تصدير الأصناف
   // الموجودة فوق الجدول) - عربي/إنجليزي/فرنسي/ألماني. أسماء الأصناف نفسها بتفضل زي ما هي دايمًا.
   const ALL_ITEMS_REPORT_I18N = {
@@ -3172,7 +3290,10 @@ function renderItems() {
     <div class="card no-print" style="margin-top:16px; padding:16px 18px; box-shadow:none; border:1.5px solid var(--sand-dark);">
       <div class="table-title" style="margin:0 0 10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <span>🔍 أصناف عميل معين خلال فترة معينة</span>
-        <button type="button" class="btn secondary" id="custLookupPrintBtn" style="padding:6px 14px; font-size:12.5px;">🖨️ طباعة PDF - تقرير العميل</button>
+        <span style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="btn secondary" id="custLookupPrintBtn" style="padding:6px 14px; font-size:12.5px;">🖨️ طباعة PDF - تقرير العميل</button>
+          <button type="button" class="btn secondary" id="custLookupExcelBtn" style="padding:6px 14px; font-size:12.5px;">📊 تصدير Excel - تقرير العميل</button>
+        </span>
       </div>
       <div class="hint" style="margin-bottom:10px;">اختار العميل (أو دور على فرع بالاسم) - ولو ما حددتش سنة أو شهر هيوريك كل الفترة المتاحة له. الفلاتر دي مستقلة عن فلاتر الصفحة فوق.</div>
       <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px;">
@@ -3320,6 +3441,10 @@ function renderItems() {
   const custPrintBtn = el.querySelector('#custLookupPrintBtn');
   if (custPrintBtn) {
     custPrintBtn.addEventListener('click', () => printCustomerItemsReport());
+  }
+  const custExcelBtn = el.querySelector('#custLookupExcelBtn');
+  if (custExcelBtn) {
+    custExcelBtn.addEventListener('click', () => exportCustomerItemsExcel());
   }
   const allItemsLangSelect = el.querySelector('#allItemsLangSelect');
   if (allItemsLangSelect) {
