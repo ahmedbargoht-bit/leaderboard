@@ -1253,6 +1253,36 @@ table.datatable details summary:hover { text-decoration: underline; }
     }
   }
 
+  // إضافة فرع جديد لدليل خطوط سير المناديب (state.repRoutes / tamr_sales_rep_routes) - سواء فرع
+  // لسه معملوش فواتير، أو فرع من قائمة "فروع الفواتير غير المتطابقة" هيتسجل بخط سير مباشرةً بدل
+  // ما نربطه بفرع موجود. اسم الفرع لازم يكون فريد (مفيش فرعين بنفس الاسم في الدليل).
+  async function addRepRouteBranch(branchNameRaw, routeRaw, groupRaw) {
+    if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان يتحفظ الفرع ده.', 'err'); return false; }
+    const branchName = normItemName(branchNameRaw);
+    const route = normItemName(routeRaw);
+    const group = normItemName(groupRaw);
+    if (!branchName) { logStatus('لازم تكتب اسم الفرع.', 'err'); return false; }
+    if (!route) { logStatus('لازم تكتب اسم خط السير.', 'err'); return false; }
+    if (state.repRoutes.has(normItemName(branchName))) {
+      logStatus(`الفرع "${branchName}" موجود بالفعل في دليل خطوط سير المناديب.`, 'err');
+      return false;
+    }
+    try {
+      const { error } = await sb.from('tamr_sales_rep_routes').upsert(
+        [{ branch_name: branchName, route, group_name: group || null, updated_at: new Date().toISOString() }],
+        { onConflict: 'branch_name' }
+      );
+      if (error) throw error;
+      state.repRoutes.set(normItemName(branchName), { route, group: group || null, branchName });
+      logStatus(`تم إضافة الفرع "${branchName}" لخط السير "${route}" في دليل خطوط سير المناديب ✓`, 'ok');
+      renderAll();
+      return true;
+    } catch (e) {
+      logStatus('تعذر إضافة الفرع: ' + (e.message || e), 'err');
+      return false;
+    }
+  }
+
   async function syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts) {
     if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length) && !(newIndirectDiscounts && newIndirectDiscounts.length))) return;
     try {
@@ -4000,21 +4030,60 @@ function renderRepRoutes() {
   unmatchedSummary.sort((a, b) => b.sum - a.sum);
   const allBranchNames = Array.from(new Set(Array.from(state.repRoutes.values()).map(r => r.branchName))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const branchDatalistHtml = allBranchNames.map(b => `<option value="${escapeHtml(b)}"></option>`).join('');
+
+  // قوائم خطوط السير والمجموعات المعروفة حاليًا في الدليل - عشان نقترحها لليوزر لما يضيف فرع جديد
+  // (مش قايمة منفصلة/جدول مستقل - خط السير هنا هو مجرد اسم بيتكرر على أكتر من فرع في نفس الجدول)
+  const allRoutesForRepRoutes = Array.from(new Set(Array.from(state.repRoutes.values()).map(r => r.route).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const allGroupsForRepRoutes = Array.from(new Set(Array.from(state.repRoutes.values()).map(r => r.group).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const routeGroupDatalistsHtml = `
+    <datalist id="rrRouteDatalist">${allRoutesForRepRoutes.map(r => `<option value="${escapeHtml(r)}"></option>`).join('')}</datalist>
+    <datalist id="rrGroupDatalist">${allGroupsForRepRoutes.map(g => `<option value="${escapeHtml(g)}"></option>`).join('')}</datalist>
+  `;
+
+  // + إضافة فرع جديد لدليل خطوط سير المناديب (مستقل - مش لازم يكون مرتبط بفاتورة غير متطابقة)
+  const addBranchBoxHtml = `
+    <div class="card" style="margin:0 0 16px; padding:16px 18px; box-shadow:none; border:1.5px solid var(--sand-dark);">
+      <div class="table-title" style="margin:0 0 10px;">+ إضافة فرع جديد لدليل خطوط سير المناديب</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div>
+          <div class="hint" style="margin:0 0 4px;">اسم الفرع</div>
+          <input type="text" id="rrNewBranchName" placeholder="اسم الفرع" style="width:200px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+        </div>
+        <div>
+          <div class="hint" style="margin:0 0 4px;">خط السير</div>
+          <input type="text" id="rrNewBranchRoute" list="rrRouteDatalist" placeholder="خط سير موجود أو جديد" style="width:170px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+        </div>
+        <div>
+          <div class="hint" style="margin:0 0 4px;">المجموعة (اختياري)</div>
+          <input type="text" id="rrNewBranchGroup" list="rrGroupDatalist" placeholder="المجموعة" style="width:170px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+        </div>
+        <button type="button" id="rrAddBranchBtn" class="btn" style="padding:9px 18px;">+ إضافة الفرع</button>
+      </div>
+      <div class="hint" style="margin-top:10px;">استخدمها لإضافة فرع جديد لسه معملوش فواتير، أو لتسجيل فرع من قائمة "فروع الفواتير غير المتطابقة" تحت بخط سير مباشرةً.</div>
+    </div>
+    ${routeGroupDatalistsHtml}
+  `;
+
   const unmatchedRowsHtml = unmatchedSummary.map(x => `
     <tr data-site="${escapeHtml(x.key)}">
       <td>${escapeHtml(x.key)}</td>
       <td>${fmt(x.count)}</td>
       <td>${fmtMoney(x.sum)}</td>
-      <td><input type="text" class="rrlink-input" list="rrLinkBranchDatalist" placeholder="اكتب اسم الفرع الصحيح من الدليل..." style="width:230px; font-family:inherit; padding:6px 8px; border-radius:8px; border:1.5px solid var(--sand-dark);"></td>
+      <td><input type="text" class="rrlink-input" list="rrLinkBranchDatalist" placeholder="اكتب اسم الفرع الصحيح من الدليل..." style="width:210px; font-family:inherit; padding:6px 8px; border-radius:8px; border:1.5px solid var(--sand-dark);"></td>
       <td><button type="button" class="btn rrlink-save-btn" style="padding:7px 14px; font-size:12.5px;">ربط</button></td>
+      <td style="white-space:nowrap;">
+        <input type="text" class="rrnew-route-input" list="rrRouteDatalist" placeholder="خط السير" style="width:110px; font-family:inherit; padding:5px 7px; border-radius:6px; border:1.5px solid var(--sand-dark); margin-inline-end:4px;">
+        <input type="text" class="rrnew-group-input" list="rrGroupDatalist" placeholder="المجموعة" style="width:110px; font-family:inherit; padding:5px 7px; border-radius:6px; border:1.5px solid var(--sand-dark);">
+      </td>
+      <td><button type="button" class="btn secondary rrnew-save-btn" style="padding:7px 14px; font-size:12.5px; white-space:nowrap;">+ فرع جديد</button></td>
     </tr>
   `).join('');
   const unmatchedLinkSectionHtml = unmatchedSummary.length ? `
     <div class="table-title">ربط فروع الفواتير غير المتطابقة (${fmt(unmatchedSummary.length)})</div>
-    <div class="hint" style="margin:0 0 10px;">أسماء فروع موجودة في الفواتير بس مش متطابقة تلقائيًا مع دليل خطوط سير المناديب (فوارق كتابة زي الشرطات أو اختصار الاسم). اختار الفرع الصحيح من الدليل واضغط "ربط" - الربط بيتحفظ دايمًا وهيتطبق تلقائيًا على أي فاتورة جاية بنفس الاسم.</div>
+    <div class="hint" style="margin:0 0 10px;">أسماء فروع موجودة في الفواتير بس مش متطابقة تلقائيًا مع دليل خطوط سير المناديب (فوارق كتابة زي الشرطات أو اختصار الاسم). لو الفرع ده موجود بالفعل في الدليل باسم مختلف: اختاره من "الفرع الصحيح بالدليل" واضغط "ربط". لو الفرع ده جديد أصلًا ومحتاج يتضاف: اكتب خط السير (والمجموعة اختياريًا) واضغط "+ فرع جديد".</div>
     <datalist id="rrLinkBranchDatalist">${branchDatalistHtml}</datalist>
     <div class="table-wrap"><table class="datatable"><thead><tr>
-      <th>اسم الفرع في الفاتورة</th><th>عدد الفواتير</th><th>صافي المبيعات</th><th>الفرع الصحيح بالدليل</th><th></th>
+      <th>اسم الفرع في الفاتورة</th><th>عدد الفواتير</th><th>صافي المبيعات</th><th>الفرع الصحيح بالدليل</th><th></th><th>أو خط سير جديد</th><th></th>
     </tr></thead><tbody>${unmatchedRowsHtml}</tbody></table></div>
   ` : '';
 
@@ -4051,6 +4120,7 @@ function renderRepRoutes() {
     </div>
     <div class="table-wrap" id="rrDirTableWrap">${tableHTML(['اسم الفرع', 'خط السير', 'المجموعة', 'صافي المبيعات (الفترة الحالية)'], initialDir.dirRows, null)}</div>
 
+    ${addBranchBoxHtml}
     ${unmatchedLinkSectionHtml}
   `;
 
@@ -4069,6 +4139,36 @@ function renderRepRoutes() {
       await assignRepRouteSiteLink(site, validBranch);
     });
   });
+
+  el.querySelectorAll('.rrnew-save-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const tr = btn.closest('tr');
+      const site = tr.dataset.site;
+      const routeInput = tr.querySelector('.rrnew-route-input');
+      const groupInput = tr.querySelector('.rrnew-group-input');
+      const route = routeInput.value.trim();
+      const group = groupInput.value.trim();
+      if (!route) { alert('اكتب اسم خط السير الأول.'); return; }
+      btn.disabled = true; btn.textContent = 'جاري الحفظ...';
+      await addRepRouteBranch(site, route, group);
+    });
+  });
+
+  const rrAddBranchBtn = el.querySelector('#rrAddBranchBtn');
+  if (rrAddBranchBtn) {
+    rrAddBranchBtn.addEventListener('click', async () => {
+      const nameInput = el.querySelector('#rrNewBranchName');
+      const routeInput = el.querySelector('#rrNewBranchRoute');
+      const groupInput = el.querySelector('#rrNewBranchGroup');
+      const name = nameInput.value.trim();
+      const route = routeInput.value.trim();
+      const group = groupInput.value.trim();
+      if (!name) { alert('اكتب اسم الفرع الأول.'); return; }
+      if (!route) { alert('اكتب اسم خط السير الأول.'); return; }
+      rrAddBranchBtn.disabled = true; rrAddBranchBtn.textContent = 'جاري الحفظ...';
+      await addRepRouteBranch(name, route, group);
+    });
+  }
 
   function refreshDirTable() {
     const built = computeDir();
