@@ -2620,6 +2620,213 @@ table.datatable details summary:hover { text-decoration: underline; }
     URL.revokeObjectURL(url);
   };
 
+  // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "المناديب وخطوط السير" - شيتين: أداء المناديب، وأداء خطوط السير
+  // (نفس بيانات renderReps بالظبط، بيتحسبوا هنا من جديد من فلاتر الصفحة الحالية عشان التصدير يفضل مطابق للمعروض)
+  window.exportRepsExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    const inv = filteredInvoices();
+    if (!inv.length) { alert('مفيش بيانات لتصديرها.'); return; }
+
+    const years = activeYears(inv, i => i.__year);
+
+    const byRep = groupSum(inv, i => i['المندوب'], i => i.__net);
+    byRep.sort((a, b) => b.sum - a.sum);
+    const repBmap = yearBreakdownMap(inv, i => i['المندوب'], i => i.__year, i => i.__net);
+
+    const withRoute = inv.filter(i => i.__route);
+    const byRoute = groupSum(withRoute, i => i.__route.خط_سير, i => i.__net);
+    byRoute.sort((a, b) => b.sum - a.sum);
+    const routeBmap = yearBreakdownMap(withRoute, i => i.__route.خط_سير, i => i.__year, i => i.__net);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const now = new Date();
+    const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
+
+    const addLetterhead = (ws, title, lastCol) => {
+      try {
+        const logoEl = document.querySelector('img.logo');
+        const src = logoEl ? logoEl.getAttribute('src') : '';
+        if (src && src.indexOf('base64,') > -1) {
+          const base64 = src.split('base64,')[1];
+          const imgId = wb.addImage({ base64, extension: 'png' });
+          ws.addImage(imgId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 64, height: 64 } });
+        }
+      } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
+      ws.mergeCells(`B1:${lastCol}2`);
+      const titleCell = ws.getCell('B1');
+      titleCell.value = 'نظام تحليل مبيعات تمور الطحان - ' + title;
+      titleCell.font = { bold: true, size: 15, color: { argb: INK } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.mergeCells(`B3:${lastCol}3`);
+      const dateCell = ws.getCell('B3');
+      dateCell.value = 'تاريخ التصدير: ' + String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + now.getFullYear();
+      dateCell.font = { size: 11, color: { argb: 'FF6B5647' } };
+      dateCell.alignment = { horizontal: 'center' };
+      ws.addRow([]);
+    };
+    const styleHeaderRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        cell.font = { bold: true, color: { argb: SAND } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+      });
+      row.height = 34;
+    };
+    const styleFooterRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        cell.font = { bold: true, color: { argb: INK } };
+        cell.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
+    };
+    const addSignatures = (ws, colCount) => {
+      ws.addRow([]); ws.addRow([]);
+      const mid1 = Math.max(1, Math.floor(colCount * 0.25)), mid2 = Math.max(mid1 + 1, Math.floor(colCount * 0.7));
+      const labelArr = new Array(colCount).fill('');
+      labelArr[mid1 - 1] = 'مدير مبيعات مودرن تريد'; labelArr[mid2 - 1] = 'مدير عام المبيعات';
+      const sigLabelRow = ws.addRow(labelArr);
+      sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
+      ws.addRow([]);
+      const lineArr = new Array(colCount).fill('');
+      lineArr[mid1 - 1] = '____________________'; lineArr[mid2 - 1] = '____________________';
+      const sigLineRow = ws.addRow(lineArr);
+      sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
+    };
+
+    /* ---- شيت 1: أداء المناديب ---- */
+    const ws1 = wb.addWorksheet('أداء المناديب', { views: [{ rightToLeft: true }] });
+    const repYearCols = years.length >= 2 ? yearColumnHeaders(years) : [];
+    const headers1 = years.length >= 2
+      ? ['المندوب', 'عدد العملاء', ...repYearCols, 'متوسط الفاتورة']
+      : ['المندوب', 'عدد العملاء', 'صافي المبيعات', 'متوسط الفاتورة'];
+    const repPctColIdx = years.length >= 2 ? (2 + repYearCols.length) : -1; // فهرس عمود "نسبة النمو"
+    const lastColLetter1 = String.fromCharCode(64 + headers1.length);
+    addLetterhead(ws1, 'المناديب وخطوط السير - أداء المناديب', lastColLetter1);
+    const headerRow1 = ws1.addRow(headers1);
+    styleHeaderRow(headerRow1);
+
+    byRep.forEach((x, idx) => {
+      const invs = inv.filter(i => i['المندوب'] === x.key);
+      const custs = new Set(invs.map(i => i['العميل'])).size;
+      const avgInvoice = x.sum / (x.count || 1);
+      const rowVals = [x.key, custs];
+      if (years.length >= 2) {
+        const ym = repBmap.get(x.key) || new Map();
+        const yearVals = years.map(y => ym.get(y) || 0);
+        const diff = yearVals[yearVals.length - 1] - yearVals[yearVals.length - 2];
+        const prev = yearVals[yearVals.length - 2];
+        const pct = prev ? diff / prev : (yearVals[yearVals.length - 1] > 0 ? 1 : 0);
+        rowVals.push(...yearVals, diff, pct);
+      } else {
+        rowVals.push(x.sum);
+      }
+      rowVals.push(avgInvoice);
+      const row = ws1.addRow(rowVals);
+      if (idx % 2 === 1) row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      row.getCell(1).alignment = { horizontal: 'right' };
+      for (let c = 2; c <= row.cellCount; c++) {
+        const cell = row.getCell(c);
+        if (typeof cell.value === 'number') cell.numFmt = (c === repPctColIdx) ? '0.0%' : '#,##0;[Red]-#,##0';
+      }
+    });
+
+    const totalRepCustomers = new Set(inv.filter(i => i['المندوب']).map(i => i['العميل'])).size;
+    const totalRepNet = byRep.reduce((s, x) => s + x.sum, 0);
+    const totalRepCount = byRep.reduce((s, x) => s + x.count, 0);
+    const footerVals1 = ['الإجمالي', totalRepCustomers];
+    if (years.length >= 2) {
+      const totalsYm = years.map(y => byRep.reduce((s, x) => s + ((repBmap.get(x.key) || new Map()).get(y) || 0), 0));
+      const diff = totalsYm[totalsYm.length - 1] - totalsYm[totalsYm.length - 2];
+      const prev = totalsYm[totalsYm.length - 2];
+      footerVals1.push(...totalsYm, diff, prev ? diff / prev : 0);
+    } else {
+      footerVals1.push(totalRepNet);
+    }
+    footerVals1.push(totalRepNet / (totalRepCount || 1));
+    const footerRow1 = ws1.addRow(footerVals1);
+    styleFooterRow(footerRow1);
+    for (let c = 2; c <= footerRow1.cellCount; c++) {
+      const cell = footerRow1.getCell(c);
+      if (typeof cell.value === 'number') cell.numFmt = (c === repPctColIdx) ? '0.0%' : '#,##0;[Red]-#,##0';
+    }
+
+    ws1.getColumn(1).width = 26;
+    for (let c = 2; c <= headers1.length; c++) ws1.getColumn(c).width = 16;
+    addSignatures(ws1, headers1.length);
+
+    /* ---- شيت 2: أداء خطوط السير ---- */
+    const ws2 = wb.addWorksheet('أداء خطوط السير', { views: [{ rightToLeft: true }] });
+    const routeYearCols = years.length >= 2 ? yearColumnHeaders(years) : [];
+    const headers2 = years.length >= 2
+      ? ['خط السير', 'المنطقة', 'القطاع', 'عدد المواقع', ...routeYearCols]
+      : ['خط السير', 'المنطقة', 'القطاع', 'عدد المواقع', 'صافي المبيعات'];
+    const routePctColIdx = years.length >= 2 ? (4 + routeYearCols.length) : -1;
+    const lastColLetter2 = String.fromCharCode(64 + headers2.length);
+    addLetterhead(ws2, 'المناديب وخطوط السير - أداء خطوط السير', lastColLetter2);
+    const headerRow2 = ws2.addRow(headers2);
+    styleHeaderRow(headerRow2);
+
+    byRoute.forEach((x, idx) => {
+      const invs = withRoute.filter(i => i.__route.خط_سير === x.key);
+      const sites = new Set(invs.map(i => i['فرع_العميل'])).size;
+      const region = invs[0] ? invs[0].__route.المنطقة : '';
+      const sector = invs[0] ? invs[0].__route.القطاع : '';
+      const rowVals = [x.key, region, sector, sites];
+      if (years.length >= 2) {
+        const ym = routeBmap.get(x.key) || new Map();
+        const yearVals = years.map(y => ym.get(y) || 0);
+        const diff = yearVals[yearVals.length - 1] - yearVals[yearVals.length - 2];
+        const prev = yearVals[yearVals.length - 2];
+        const pct = prev ? diff / prev : (yearVals[yearVals.length - 1] > 0 ? 1 : 0);
+        rowVals.push(...yearVals, diff, pct);
+      } else {
+        rowVals.push(x.sum);
+      }
+      const row = ws2.addRow(rowVals);
+      if (idx % 2 === 1) row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      row.getCell(1).alignment = { horizontal: 'right' };
+      for (let c = 4; c <= row.cellCount; c++) {
+        const cell = row.getCell(c);
+        if (typeof cell.value === 'number') cell.numFmt = (c === routePctColIdx) ? '0.0%' : '#,##0;[Red]-#,##0';
+      }
+    });
+
+    const totalRouteSites = new Set(withRoute.map(i => i['فرع_العميل'])).size;
+    const totalRouteNet = byRoute.reduce((s, x) => s + x.sum, 0);
+    const footerVals2 = ['الإجمالي', '-', '-', totalRouteSites];
+    if (years.length >= 2) {
+      const totalsYm = years.map(y => byRoute.reduce((s, x) => s + ((routeBmap.get(x.key) || new Map()).get(y) || 0), 0));
+      const diff = totalsYm[totalsYm.length - 1] - totalsYm[totalsYm.length - 2];
+      const prev = totalsYm[totalsYm.length - 2];
+      footerVals2.push(...totalsYm, diff, prev ? diff / prev : 0);
+    } else {
+      footerVals2.push(totalRouteNet);
+    }
+    const footerRow2 = ws2.addRow(footerVals2);
+    styleFooterRow(footerRow2);
+    for (let c = 4; c <= footerRow2.cellCount; c++) {
+      const cell = footerRow2.getCell(c);
+      if (typeof cell.value === 'number') cell.numFmt = (c === routePctColIdx) ? '0.0%' : '#,##0;[Red]-#,##0';
+    }
+
+    ws2.getColumn(1).width = 26; ws2.getColumn(2).width = 20; ws2.getColumn(3).width = 20; ws2.getColumn(4).width = 14;
+    for (let c = 5; c <= headers2.length; c++) ws2.getColumn(c).width = 16;
+    addSignatures(ws2, headers2.length);
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    a.download = 'المناديب_وخطوط_السير_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "الأصناف" - شيتين: بالقيمة (مع تفصيل السنوات لو متاحة) وبالكمية
   window.exportItemsExcel = async function () {
     if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
@@ -3915,7 +4122,12 @@ function renderReps() {
     : `<div class="pill-note" style="background:#E1EFE4;color:#2f6b45;">✓ كل الفواتير تم ربطها بخط سير بنجاح.</div>`;
 
   el.innerHTML = `
-    <div class="table-title">أداء المناديب</div>
+    <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <span>أداء المناديب</span>
+      <span class="no-print" style="display:flex; gap:8px;">
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportRepsExcel()">📊 تصدير Excel</button>
+      </span>
+    </div>
     <div class="grid2">
       <div class="chart-box"><canvas id="chReps"></canvas></div>
       <div class="table-wrap">${tableHTML(repHeaders, repRows, repFooter)}</div>
