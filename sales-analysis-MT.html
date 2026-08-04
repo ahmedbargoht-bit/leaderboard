@@ -389,6 +389,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <button class="tabbtn" data-tab="panel-branchindirect" data-label="توزيع الخصم على الفروع">توزيع الخصم على الفروع</button>
       <button class="tabbtn" data-tab="panel-collectedchecks" data-label="الشيكات المحصلة">الشيكات المحصلة</button>
       <button class="tabbtn" data-tab="panel-debtaging" data-label="أعمار الديون">أعمار الديون</button>
+      <button class="tabbtn" data-tab="panel-duecollections" data-label="التحصيلات المستحقة">التحصيلات المستحقة</button>
     </div>
 
     <div class="print-only" id="printFilterSummary"></div>
@@ -410,6 +411,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       <div class="tabpanel" id="panel-branchindirect"></div>
       <div class="tabpanel" id="panel-collectedchecks"></div>
       <div class="tabpanel" id="panel-debtaging"></div>
+      <div class="tabpanel" id="panel-duecollections"></div>
     </div>
   </div>
 
@@ -987,7 +989,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     collectedChecks: [],  // تفاصيل الشيكات المحصلة من ملفات "كشف حساب العملاء" (تاب الشيكات المحصلة)
     accountLedger: [],  // حركة مدين/دائن كاملة لكل عميل من نفس الملفات - مصدر "المستحق" و"أعمار الديون" (تُحسب دايمًا وقت العرض، مش مخزنة كأرصدة جاهزة)
     collectedChecksFilter: { branch: [], customer: '', years: [], months: [] },  // فلاتر تاب الشيكات المحصلة
-    debtAgingFilter: { branch: [], search: '', asOfDate: '' }  // فلاتر تاب أعمار الديون - asOfDate فاضي = آخر تاريخ متاح في البيانات
+    debtAgingFilter: { branch: [], search: '', asOfDate: '' },  // فلاتر تاب أعمار الديون - asOfDate فاضي = آخر تاريخ متاح في البيانات
+    dueCollectionsFilter: { year: null, month: null }  // تاب "التحصيلات المستحقة خلال الشهر" - year/month فاضيين = الشهر الحالي الفعلي (تاريخ اليوم)
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -1189,6 +1192,16 @@ table.datatable details summary:hover { text-decoration: underline; }
     }
     results.sort((a, b) => b.total - a.total);
     return results;
+  }
+
+  // نظام الأجل عند الطحان: الفاتورة بتُقفل نهاية شهرها، وبعدين مهلة شهرين تحصيل - يعني فاتورة شهر
+  // معين أقصى ميعاد تحصيلها نهاية الشهر اللي بعده بشهرين، وشهر المتابعة/المراجعة (اللي بيُتوقع تحصيلها
+  // فيه أو التأكد إنها اتحصلت) هو الشهر اللي بعد كده - يعني شهر الفاتورة + 3 = شهر المتابعة.
+  // مثال: فاتورة مايو (5) -> مهلة لحد نهاية يوليو -> شهر المتابعة أغسطس (8).
+  function computeSourceMonth(targetYear, targetMonth) {
+    let m = targetMonth - 3, y = targetYear;
+    if (m <= 0) { m += 12; y -= 1; }
+    return { year: y, month: m };
   }
 
   // أحدث تاريخ حركة في الليدجر (يُستخدم كقيمة افتراضية لـ"تاريخ الحساب" في تاب أعمار الديون)
@@ -3348,6 +3361,104 @@ table.datatable details summary:hover { text-decoration: underline; }
     URL.revokeObjectURL(url);
   };
 
+  // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "التحصيلات المستحقة خلال الشهر"
+  window.exportDueCollectionsExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    const f = state.dueCollectionsFilter;
+    const now = new Date();
+    const targetYear = f.year || now.getFullYear();
+    const targetMonth = f.month || (now.getMonth() + 1);
+    const { src, rows } = dueCollectionsRows(targetYear, targetMonth);
+    if (!rows.length) { alert('مفيش فواتير لشهر ' + MONTH_NAMES_AR[src.month - 1] + ' ' + src.year + ' لتصديرها.'); return; }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const nowStamp = new Date();
+    const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
+    const numFmt = '#,##0;[Red]-#,##0';
+
+    const addLetterhead = (ws, title, lastCol) => {
+      try {
+        const logoEl = document.querySelector('img.logo');
+        const src2 = logoEl ? logoEl.getAttribute('src') : '';
+        if (src2 && src2.indexOf('base64,') > -1) {
+          const base64 = src2.split('base64,')[1];
+          const imgId = wb.addImage({ base64, extension: 'png' });
+          ws.addImage(imgId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 64, height: 64 } });
+        }
+      } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
+      ws.mergeCells(`B1:${lastCol}2`);
+      const titleCell = ws.getCell('B1');
+      titleCell.value = 'نظام تحليل مبيعات تمور الطحان - ' + title;
+      titleCell.font = { bold: true, size: 15, color: { argb: INK } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.mergeCells(`B3:${lastCol}3`);
+      const dateCell = ws.getCell('B3');
+      dateCell.value = 'تاريخ التصدير: ' + String(nowStamp.getDate()).padStart(2, '0') + '/' + String(nowStamp.getMonth() + 1).padStart(2, '0') + '/' + nowStamp.getFullYear();
+      dateCell.font = { size: 11, color: { argb: 'FF6B5647' } };
+      dateCell.alignment = { horizontal: 'center' };
+      ws.addRow([]);
+    };
+    const styleHeaderRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        cell.font = { bold: true, color: { argb: SAND } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+      });
+      row.height = 34;
+    };
+    const styleFooterRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        cell.font = { bold: true, color: { argb: INK } };
+        cell.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
+    };
+    const addSignatures = (ws, colCount) => {
+      ws.addRow([]); ws.addRow([]);
+      const mid1 = Math.max(1, Math.floor(colCount * 0.25)), mid2 = Math.max(mid1 + 1, Math.floor(colCount * 0.7));
+      const labelArr = new Array(colCount).fill('');
+      labelArr[mid1 - 1] = 'مدير مبيعات مودرن تريد'; labelArr[mid2 - 1] = 'مدير عام المبيعات';
+      const sigLabelRow = ws.addRow(labelArr);
+      sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
+      ws.addRow([]);
+      const lineArr = new Array(colCount).fill('');
+      lineArr[mid1 - 1] = '____________________'; lineArr[mid2 - 1] = '____________________';
+      const sigLineRow = ws.addRow(lineArr);
+      sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
+    };
+
+    const ws1 = wb.addWorksheet('التحصيلات المستحقة', { views: [{ rightToLeft: true }] });
+    const headers1 = ['العميل', 'إجمالي قبل الخصم', 'خصم مباشر', 'الضريبة', 'مرتجع الشهر', 'المستحق تحصيله'];
+    addLetterhead(ws1, `التحصيلات المستحقة خلال ${MONTH_NAMES_AR[targetMonth - 1]} ${targetYear} (فواتير ${MONTH_NAMES_AR[src.month - 1]} ${src.year})`, 'F');
+    const headerRow1 = ws1.addRow(headers1);
+    styleHeaderRow(headerRow1);
+    let totGross = 0, totDisc = 0, totTax = 0, totRet = 0, totDue = 0;
+    rows.forEach((r, idx) => {
+      totGross += r.gross; totDisc += r.discount; totTax += r.tax; totRet += r.ret; totDue += r.due;
+      const row = ws1.addRow([r.customer, r.gross, r.discount, r.tax, r.ret, r.due]);
+      if (idx % 2 === 1) row.eachCell(cell => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      for (let c = 2; c <= 6; c++) row.getCell(c).numFmt = numFmt;
+    });
+    const footerRow1 = ws1.addRow(['الإجمالي', totGross, totDisc, totTax, totRet, totDue]);
+    styleFooterRow(footerRow1);
+    for (let c = 2; c <= 6; c++) footerRow1.getCell(c).numFmt = numFmt;
+    ws1.getColumn(1).width = 40; for (let c = 2; c <= 6; c++) ws1.getColumn(c).width = 18;
+    addSignatures(ws1, headers1.length);
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = nowStamp.getFullYear() + '-' + String(nowStamp.getMonth() + 1).padStart(2, '0') + '-' + String(nowStamp.getDate()).padStart(2, '0');
+    a.download = 'التحصيلات_المستحقة_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "الأصناف" - شيتين: بالقيمة (مع تفصيل السنوات لو متاحة) وبالكمية
   window.exportItemsExcel = async function () {
     if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
@@ -3791,6 +3902,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     renderBranchIndirect();
     renderCollectedChecks();
     renderDebtAging();
+    renderDueCollections();
     renderPrintFilterSummary();
   }
 
@@ -6060,6 +6172,136 @@ function renderDebtAging() {
     asOfInput.addEventListener('change', () => {
       state.debtAgingFilter.asOfDate = asOfInput.value;
       renderDebtAging();
+    });
+  }
+}
+
+/* ---------------- التحصيلات المستحقة خلال الشهر (نظام الأجل: فاتورة الشهر + 3 = شهر المتابعة) ---------------- */
+
+// بيرجع صفوف "المستحق تحصيله" لشهر متابعة معين: صافي فواتير الشهر المصدر (شهر المتابعة - 3) لكل عميل
+// بعد خصم الخصم المباشر والضريبة والمرتجع (مرتجعات نفس الشهر المصدر بس). مصدره state.invoices/state.returns
+// مباشرة (بدون فلاتر الصفحة العلوية) عشان يفضل مستقل زي باقي أدوات التاب ده.
+function dueCollectionsRows(targetYear, targetMonth) {
+  const src = computeSourceMonth(targetYear, targetMonth);
+  const invs = state.invoices.filter(i => i.__year === src.year && i.__month === src.month);
+  const returns = state.returns.filter(r => r.__year === src.year && r.__month === src.month);
+
+  const retByCustNorm = new Map();
+  returns.forEach(r => {
+    const k = r.__عميل_مطابق;
+    retByCustNorm.set(k, (retByCustNorm.get(k) || 0) + (r['الإجمالي'] || 0));
+  });
+
+  const byCust = new Map(); // customer -> {gross, discount, tax, net}
+  invs.forEach(i => {
+    const c = i['العميل'];
+    if (!c) return;
+    if (!byCust.has(c)) byCust.set(c, { gross: 0, discount: 0, tax: 0, net: 0 });
+    const e = byCust.get(c);
+    e.gross += i.__gross; e.discount += i.__discount; e.tax += i.__tax; e.net += i.__net;
+  });
+
+  const rows = Array.from(byCust.entries()).map(([cust, e]) => {
+    const normKey = SalesParser.normalizeCustomerKey(cust);
+    const ret = retByCustNorm.get(normKey) || 0;
+    return { customer: cust, gross: e.gross, discount: e.discount, tax: e.tax, net: e.net, ret, due: e.net - ret };
+  });
+  rows.sort((a, b) => b.due - a.due);
+  return { src, rows };
+}
+
+function renderDueCollections() {
+  const el = document.getElementById('panel-duecollections');
+  if (!el) return;
+  if (!state.invoices.length) { el.innerHTML = emptyState('ارفع ملفات الفواتير أولًا'); return; }
+
+  const f = state.dueCollectionsFilter;
+  const now = new Date();
+  if (!f.year) f.year = now.getFullYear();
+  if (!f.month) f.month = now.getMonth() + 1;
+
+  const invYears = activeYears(state.invoices, i => i.__year);
+  const minYear = invYears.length ? Math.min(...invYears) : now.getFullYear();
+  const maxYear = Math.max(invYears.length ? Math.max(...invYears) : now.getFullYear(), now.getFullYear()) + 1;
+  const yearsOptions = [];
+  for (let y = minYear; y <= maxYear; y++) yearsOptions.push(y);
+
+  const { src, rows } = dueCollectionsRows(f.year, f.month);
+
+  const selectorHtml = `
+    <div class="no-print" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px;">
+      <label style="font-size:13px; display:flex; align-items:center; gap:6px;">شهر المتابعة (التحصيل):
+        <select id="dcMonthSel" style="padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-family:inherit;">
+          ${MONTH_NAMES_AR.map((m, idx) => `<option value="${idx + 1}" ${f.month === idx + 1 ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>
+      </label>
+      <select id="dcYearSel" style="padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-family:inherit;">
+        ${yearsOptions.map(y => `<option value="${y}" ${f.year === y ? 'selected' : ''}>${y}</option>`).join('')}
+      </select>
+      <span style="font-size:12.5px; color:var(--ink-soft);">= فواتير شهر <b>${MONTH_NAMES_AR[src.month - 1]} ${src.year}</b> (نظام الأجل: مهلة شهرين من نهاية شهر الفاتورة)</span>
+    </div>
+  `;
+
+  if (!rows.length) {
+    el.innerHTML = `
+      <div class="table-title">التحصيلات المستحقة خلال الشهر</div>
+      ${selectorHtml}
+      ${emptyState(`مفيش فواتير مسجلة لشهر ${MONTH_NAMES_AR[src.month - 1]} ${src.year} (الشهر المصدر لمتابعة تحصيل ${MONTH_NAMES_AR[f.month - 1]} ${f.year}) - ارفعه في "ملفات تقارير الفواتير" لو عايز تشوف المستحق منه.`)}
+    `;
+    wireDueCollectionsSelectors(el);
+    return;
+  }
+
+  const totalDue = rows.reduce((s, r) => s + r.due, 0);
+  const totalGross = rows.reduce((s, r) => s + r.gross, 0);
+  const totalRet = rows.reduce((s, r) => s + r.ret, 0);
+
+  const cardsHtml = `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kv">${fmtMoney(totalDue)}</div><div class="kl">إجمالي المستحق تحصيله</div></div>
+      <div class="kpi"><div class="kv">${fmt(rows.length)}</div><div class="kl">عدد العملاء</div></div>
+      <div class="kpi"><div class="kv">${fmtMoney(totalRet)}</div><div class="kl">مرتجعات نفس الشهر</div></div>
+    </div>
+  `;
+
+  const headers = ['العميل', 'إجمالي قبل الخصم', 'خصم مباشر', 'الضريبة', 'مرتجع الشهر', 'المستحق تحصيله'];
+  const bodyRows = rows.map(r => [
+    r.customer, fmtMoney(r.gross), fmtMoney(r.discount), fmtMoney(r.tax),
+    r.ret ? `<span style="color:var(--bad); font-weight:700;">-${fmtMoney(r.ret)}</span>` : fmtMoney(0),
+    `<b>${fmtMoney(r.due)}</b>`
+  ]);
+  const footer = ['الإجمالي', fmtMoney(totalGross), fmtMoney(rows.reduce((s, r) => s + r.discount, 0)), fmtMoney(rows.reduce((s, r) => s + r.tax, 0)), fmtMoney(totalRet), `<b>${fmtMoney(totalDue)}</b>`];
+
+  el.innerHTML = `
+    <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <span>التحصيلات المستحقة خلال شهر ${MONTH_NAMES_AR[f.month - 1]} ${f.year}</span>
+      <span class="no-print" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button>
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportDueCollectionsExcel()">📊 تصدير Excel</button>
+      </span>
+    </div>
+    ${selectorHtml}
+    <div class="hint" style="margin-bottom:10px;">نظام الأجل عند الطحان: الفاتورة بتُقفل نهاية شهرها وبعدين مهلة تحصيل شهرين، يعني فاتورة شهر معين المفروض تتحصل خلال الشهر اللي بعده بـ3 شهور. الجدول ده بيوري صافي فواتير <b>${MONTH_NAMES_AR[src.month - 1]} ${src.year}</b> (بعد الخصم المباشر والضريبة والمرتجع) كـ"مستحق تحصيله" في شهر <b>${MONTH_NAMES_AR[f.month - 1]} ${f.year}</b>. البيانات من نفس ملفات الفواتير العادية، مش من كشوف الحساب.</div>
+    ${cardsHtml}
+    <div class="table-wrap">${tableHTML(headers, bodyRows, footer)}</div>
+  `;
+
+  wireDueCollectionsSelectors(el);
+}
+
+function wireDueCollectionsSelectors(el) {
+  const monthSel = el.querySelector('#dcMonthSel');
+  const yearSel = el.querySelector('#dcYearSel');
+  if (monthSel) {
+    monthSel.addEventListener('change', () => {
+      state.dueCollectionsFilter.month = Number(monthSel.value);
+      renderDueCollections();
+    });
+  }
+  if (yearSel) {
+    yearSel.addEventListener('change', () => {
+      state.dueCollectionsFilter.year = Number(yearSel.value);
+      renderDueCollections();
     });
   }
 }
