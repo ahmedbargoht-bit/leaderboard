@@ -989,7 +989,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     collectedChecks: [],  // تفاصيل الشيكات المحصلة من ملفات "كشف حساب العملاء" (تاب الشيكات المحصلة)
     accountLedger: [],  // حركة مدين/دائن كاملة لكل عميل من نفس الملفات - مصدر "المستحق" و"أعمار الديون" (تُحسب دايمًا وقت العرض، مش مخزنة كأرصدة جاهزة)
     collectedChecksFilter: { branch: [], customer: '', years: [], months: [] },  // فلاتر تاب الشيكات المحصلة
-    debtAgingFilter: { branch: [], search: '', asOfDate: '' },  // فلاتر تاب أعمار الديون - asOfDate فاضي = آخر تاريخ متاح في البيانات
+    debtAgingFilter: { branch: [], search: '', asOfDate: '', invoiceMonth: '' },  // فلاتر تاب أعمار الديون - asOfDate فاضي = آخر تاريخ متاح في البيانات
     dueCollectionsFilter: { year: null, month: null }  // تاب "التحصيلات المستحقة خلال الشهر" - year/month فاضيين = الشهر الحالي الفعلي (تاريخ اليوم)
   };
 
@@ -1202,6 +1202,62 @@ table.datatable details summary:hover { text-decoration: underline; }
     let m = targetMonth - 3, y = targetYear;
     if (m <= 0) { m += 12; y -= 1; }
     return { year: y, month: m };
+  }
+
+  // أعمار الديون موزّعة حسب "شهر الفاتورة الأصلي" بدل عدد الأيام: نفس منطق FIFO بالظبط،
+  // بس بدل ما نحسب عمر كل باقي بالأيام، بنوسمه بشهر/سنة الفاتورة الأصلية اللي طلع منها.
+  function computeAgingByInvoiceMonth(ledgerEntries, asOfDate) {
+    const groups = new Map();
+    for (const e of ledgerEntries) {
+      const key = e.customer + '||' + e.branch;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(e);
+    }
+    const results = [];
+    for (const entries of groups.values()) {
+      entries.sort((a, b) => a.date - b.date);
+      const queue = [];
+      for (const e of entries) {
+        if (e.debit > 1e-6) queue.push({ date: e.date, remaining: e.debit, customer: e.customer, customerCode: e.customerCode, branch: e.branch });
+        if (e.credit > 1e-6) {
+          let rem = e.credit;
+          while (rem > 1e-6 && queue.length) {
+            const head = queue[0];
+            const take = Math.min(head.remaining, rem);
+            head.remaining -= take;
+            rem -= take;
+            if (head.remaining <= 1e-6) queue.shift();
+          }
+        }
+      }
+      for (const q of queue) {
+        if (q.remaining <= 1e-6) continue;
+        results.push({ customer: q.customer, customerCode: q.customerCode, branch: q.branch, invoiceYear: q.date.getFullYear(), invoiceMonth: q.date.getMonth() + 1, amount: q.remaining });
+      }
+    }
+    return results;
+  }
+
+  // نفس اللي فوق بس مجمّع/مفلتر على شهر فاتورة واحد محدد لكل عميل
+  function agingByInvoiceMonthGrouped(ledgerEntries, asOfDate, filterYear, filterMonth) {
+    const raw = computeAgingByInvoiceMonth(ledgerEntries, asOfDate);
+    const m = new Map();
+    raw.forEach(r => {
+      if (r.invoiceYear !== filterYear || r.invoiceMonth !== filterMonth) return;
+      const key = r.customer + '||' + r.branch;
+      if (!m.has(key)) m.set(key, { customer: r.customer, customerCode: r.customerCode, branch: r.branch, amount: 0 });
+      m.get(key).amount += r.amount;
+    });
+    return Array.from(m.values()).sort((a, b) => b.amount - a.amount);
+  }
+
+  // كل الشهور اللي فيها فواتير (ديبت) في الليدجر - تُستخدم لتعبئة قائمة فلتر "شهر الفاتورة الأصلي"
+  function distinctLedgerInvoiceMonths() {
+    const s = new Set();
+    state.accountLedger.forEach(e => {
+      if (e.debit > 1e-6 && e.date) s.add(e.date.getFullYear() + '-' + String(e.date.getMonth() + 1).padStart(2, '0'));
+    });
+    return Array.from(s).sort().reverse();
   }
 
   // أحدث تاريخ حركة في الليدجر (يُستخدم كقيمة افتراضية لـ"تاريخ الحساب" في تاب أعمار الديون)
@@ -6084,23 +6140,14 @@ function renderDebtAging() {
 
   const f = state.debtAgingFilter;
   const branches = distinctStatementBranches();
+  const invoiceMonths = distinctLedgerInvoiceMonths();
   const maxDate = latestLedgerDate();
   const asOfDate = f.asOfDate ? new Date(f.asOfDate) : (maxDate ? new Date(maxDate.getTime() + 24 * 3600 * 1000) : new Date());
 
   let ledger = state.accountLedger;
   if (f.branch.length) ledger = ledger.filter(e => f.branch.includes(e.branch));
 
-  let aging = computeAgingBuckets(ledger, asOfDate);
-  if (f.search && f.search.trim()) {
-    const q = f.search.trim();
-    aging = aging.filter(a => a.customer.includes(q));
-  }
-
-  const totals = aging.reduce((s, a) => {
-    s.total += a.total; s.d1_30 += a.d1_30; s.d31_60 += a.d31_60; s.d61_90 += a.d61_90; s.d90plus += a.d90plus;
-    return s;
-  }, { total: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 });
-  const totalOverduePct = totals.total ? ((totals.d61_90 + totals.d90plus) / totals.total) * 100 : 0;
+  const invoiceMonthLabel = (ym) => { const [y, m] = ym.split('-').map(Number); return MONTH_NAMES_AR[m - 1] + ' ' + y; };
 
   const filterBarHtml = `
     <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;">
@@ -6112,8 +6159,68 @@ function renderDebtAging() {
       </div>
     </div>
     <input type="text" id="daCustSearch" class="no-print" placeholder="🔍 بحث باسم العميل..." value="${escapeHtml(f.search || '')}" style="padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-family:inherit; min-width:220px; margin-inline-end:8px;">
-    <label class="no-print" style="display:inline-flex; align-items:center; gap:6px; font-size:13px;">تاريخ الحساب: <input type="date" id="daAsOfDate" value="${isoDate(asOfDate)}" style="padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-family:inherit;"></label>
+    <label class="no-print" style="display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-inline-end:8px;">تاريخ الحساب: <input type="date" id="daAsOfDate" value="${isoDate(asOfDate)}" style="padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-family:inherit;"></label>
+    <label class="no-print" style="display:inline-flex; align-items:center; gap:6px; font-size:13px;">شهر الفاتورة الأصلي:
+      <select id="daInvoiceMonthSel" style="padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-family:inherit;">
+        <option value="" ${!f.invoiceMonth ? 'selected' : ''}>الكل (أعمار حسب الأيام)</option>
+        ${invoiceMonths.map(ym => `<option value="${ym}" ${f.invoiceMonth === ym ? 'selected' : ''}>${invoiceMonthLabel(ym)}</option>`).join('')}
+      </select>
+    </label>
   `;
+
+  // ---- وضع "شهر فاتورة محدد": بيعرض بالظبط المتبقي من فواتير الشهر ده بس (بعد خصم كل التحصيلات
+  // المسجلة، مهما كان تاريخها) - مش موزّع حسب عمر الدين، لأن كله من نفس الشهر أصلًا.
+  if (f.invoiceMonth) {
+    const [fy, fm] = f.invoiceMonth.split('-').map(Number);
+    let rowsIm = agingByInvoiceMonthGrouped(ledger, asOfDate, fy, fm);
+    if (f.search && f.search.trim()) {
+      const q = f.search.trim();
+      rowsIm = rowsIm.filter(r => r.customer.includes(q));
+    }
+    const totalIm = rowsIm.reduce((s, r) => s + r.amount, 0);
+
+    if (!rowsIm.length) {
+      el.innerHTML = `
+        <div class="table-title">أعمار الديون / مديونية العملاء</div>
+        <div class="no-print" style="margin-bottom:4px;">${filterBarHtml}</div>
+        ${emptyState(`مفيش مبالغ لسه متحصلتش من فواتير ${invoiceMonthLabel(f.invoiceMonth)} - يبقى اتحصّلت بالكامل (أو مفيش فواتير أصلًا للشهر ده في البيانات المرفوعة).`)}
+      `;
+      wireDebtAgingFilters(el);
+      return;
+    }
+
+    const headersIm = ['العميل', 'الفرع', `المتبقي من فواتير ${invoiceMonthLabel(f.invoiceMonth)}`];
+    const bodyIm = rowsIm.map(r => [r.customer, r.branch, `<b>${fmtMoney(r.amount)}</b>`]);
+    const footerIm = ['الإجمالي', '', `<b>${fmtMoney(totalIm)}</b>`];
+
+    el.innerHTML = `
+      <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <span>أعمار الديون / مديونية العملاء</span>
+        <span class="no-print" style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button>
+          <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportDebtAgingExcel()">📊 تصدير Excel</button>
+        </span>
+      </div>
+      <div class="no-print" style="margin-bottom:4px;">${filterBarHtml}</div>
+      <div class="hint" style="margin-bottom:10px;">عرض مقفول على فواتير <b>${invoiceMonthLabel(f.invoiceMonth)}</b> بس: القيمة اللي جنب كل عميل هي بالظبط اللي لسه متحصلش من فواتير الشهر ده تحديدًا، بعد ما اتخصم منها كل شيك/تحصيل نقدي/مرتجع اتسجل لحد "تاريخ الحساب" (مهما كان تاريخ التحصيل ده). لو عايز الأعمار موزّعة بالأيام لكل الشهور مع بعض، اختار "الكل" فوق.</div>
+      <div class="table-wrap">${tableHTML(headersIm, bodyIm, footerIm)}</div>
+    `;
+    wireDebtAgingFilters(el);
+    return;
+  }
+
+  // ---- الوضع العادي: أعمار الديون موزّعة حسب عدد أيام التأخير (1-30/31-60/61-90/+90) ----
+  let aging = computeAgingBuckets(ledger, asOfDate);
+  if (f.search && f.search.trim()) {
+    const q = f.search.trim();
+    aging = aging.filter(a => a.customer.includes(q));
+  }
+
+  const totals = aging.reduce((s, a) => {
+    s.total += a.total; s.d1_30 += a.d1_30; s.d31_60 += a.d31_60; s.d61_90 += a.d61_90; s.d90plus += a.d90plus;
+    return s;
+  }, { total: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 });
+  const totalOverduePct = totals.total ? ((totals.d61_90 + totals.d90plus) / totals.total) * 100 : 0;
 
   const headers = ['م', 'اسم العميل', 'الفرع', 'اجمالي الرصيد', 'من 1 الى 30 يوم', 'من 31 الى 60 يوم', 'من 61 الى 90 يوم', 'اكثر من 90 يوم', 'نسبة الديون المتعثرة (60+ يوم)'];
   const rows = aging.map((a, idx) => [
@@ -6137,6 +6244,10 @@ function renderDebtAging() {
     <div class="table-wrap">${tableHTML(headers, rows, footer)}</div>
   `;
 
+  wireDebtAgingFilters(el);
+}
+
+function wireDebtAgingFilters(el) {
   wireMsToggle(el);
   const branchBtn = el.querySelector('#daBranchBtn'), branchPanel = el.querySelector('#daBranchPanel');
   if (branchBtn && branchPanel) {
@@ -6171,6 +6282,13 @@ function renderDebtAging() {
   if (asOfInput) {
     asOfInput.addEventListener('change', () => {
       state.debtAgingFilter.asOfDate = asOfInput.value;
+      renderDebtAging();
+    });
+  }
+  const invoiceMonthSel = el.querySelector('#daInvoiceMonthSel');
+  if (invoiceMonthSel) {
+    invoiceMonthSel.addEventListener('change', () => {
+      state.debtAgingFilter.invoiceMonth = invoiceMonthSel.value;
       renderDebtAging();
     });
   }
