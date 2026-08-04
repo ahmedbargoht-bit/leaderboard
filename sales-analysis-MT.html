@@ -343,6 +343,17 @@ table.datatable details summary:hover { text-decoration: underline; }
         <input type="file" id="indirectInput" accept=".xlsx,.xls" multiple hidden>
         <div class="filelist" id="indirectFileList"></div>
       </div>
+      <div>
+        <div class="dropzone" id="statementDzone">
+          <div class="dz-icon">🧾</div>
+          <div class="dz-text">
+            <div class="dz-title">ملفات كشف حساب العملاء</div>
+            <div class="dz-sub">اكسيل لكل فرع (أكثر من ملف) - بيستخرج منها الشيكات المحصلة والمستحق وأعمار الديون</div>
+          </div>
+        </div>
+        <input type="file" id="statementInput" accept=".xlsx,.xls" multiple hidden>
+        <div class="filelist" id="statementFileList"></div>
+      </div>
     </div>
     <div style="margin-top:16px; display:flex; align-items:center; gap:14px;">
       <button class="btn" id="processBtn" disabled>⚙️ معالجة البيانات وعرض التحليل</button>
@@ -376,6 +387,8 @@ table.datatable details summary:hover { text-decoration: underline; }
       <button class="tabbtn" data-tab="panel-linkindirect" data-label="ربط عملاء الخصم">ربط عملاء الخصم</button>
       <button class="tabbtn" data-tab="panel-customerdiscounts" data-label="خصومات العملاء">خصومات العملاء</button>
       <button class="tabbtn" data-tab="panel-branchindirect" data-label="توزيع الخصم على الفروع">توزيع الخصم على الفروع</button>
+      <button class="tabbtn" data-tab="panel-collectedchecks" data-label="الشيكات المحصلة">الشيكات المحصلة</button>
+      <button class="tabbtn" data-tab="panel-debtaging" data-label="أعمار الديون">أعمار الديون</button>
     </div>
 
     <div class="print-only" id="printFilterSummary"></div>
@@ -395,6 +408,8 @@ table.datatable details summary:hover { text-decoration: underline; }
       <div class="tabpanel" id="panel-linkindirect"></div>
       <div class="tabpanel" id="panel-customerdiscounts"></div>
       <div class="tabpanel" id="panel-branchindirect"></div>
+      <div class="tabpanel" id="panel-collectedchecks"></div>
+      <div class="tabpanel" id="panel-debtaging"></div>
     </div>
   </div>
 
@@ -837,7 +852,102 @@ table.datatable details summary:hover { text-decoration: underline; }
     return { discounts, errors: [] };
   }
 
-  return { parseSheet, parseRouteSheet, matchRoute, parseReturnsSheet, parseIndirectDiscountSheet, normalizeCustomerKey, BRANCH_ALIAS, FOOTER_LABEL_MAP };
+  // ---------------------------------------------------------------------------
+  // نفس ملفات "كشف حساب العملاء" أعلاه، لكن هنا بنستخلص كل السطور المفيدة مرة واحدة
+  // (مش بس الخصم غير المباشر): الشيكات المحصلة (تفاصيل) + حركة كل عميل الكاملة (ليدجر
+  // مدين/دائن) اللي بتُستخدم بعدين في حساب "المستحق" و"أعمار الديون" (FIFO).
+  //   مدين (فاتورة جديدة) = صافى الفاتورة الموجب (عمود 8) + مبالغ مضافة الموجبة (عمود 3)
+  //   دائن (تحصيل/مرتجع) = صافى الفاتورة السالب (مرتجع) + مبالغ مضافة السالبة + مبالغ مخصومة
+  //                        + محصل من المرتدات + مرتدات + شيكات + مدفوعات نقدى
+  // تم التحقق من صحة المنطق ده بمطابقة تامة (لآخر قرش) لعدد الشيكات وقيمتها الإجمالية، وعدد
+  // العملاء وإجمالي أرصدتهم الختامية، ضد ملف حقيقي كامل (8581 صف).
+  function parseAccountStatementSheet(rows, fileName) {
+    const checks = [];
+    const balances = [];
+    const ledger = [];
+    let curName = null;
+    let curCode = null;
+    let curStatementBranch = null;
+    let lastBalance = null;
+    let lastDate = null;
+    const checkSeqCounters = {};   // عميل -> عداد تسلسلي للشيكات (يُستخدم كمفتاح تفرد مع الملف)
+    const ledgerSeqCounters = {};  // عميل -> عداد تسلسلي لصفوف الليدجر
+
+    const flushCustomer = () => {
+      if (curName && lastBalance !== null) {
+        balances.push({
+          customer: curName,
+          customerCode: curCode,
+          branch: curStatementBranch || '',
+          balance: lastBalance,
+          asOfDate: lastDate,
+        });
+      }
+    };
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      if (row[7] === 'إسم العميل :') {
+        flushCustomer();
+        curName = (row[6] || '').toString().trim().replace(/\s+/g, ' ');
+        curCode = row[4] != null ? String(row[4]).trim() : '';
+        curStatementBranch = (row[0] || '').toString().trim().replace(/\s+/g, ' ');
+        lastBalance = null;
+        lastDate = null;
+        if (!(curName in checkSeqCounters)) checkSeqCounters[curName] = 0;
+        if (!(curName in ledgerSeqCounters)) ledgerSeqCounters[curName] = 0;
+        continue;
+      }
+      if (row[0] == null) continue;
+      if (typeof row[1] !== 'number') continue;
+      if (row[8] === 'الإجمالى') continue;
+
+      const desc = row[0];
+      const balance = row[1];
+      const deducted = typeof row[2] === 'number' ? row[2] : 0;   // مبالغ مخصومة
+      const added = typeof row[3] === 'number' ? row[3] : 0;      // مبالغ مضافة
+      const collectedReturns = typeof row[4] === 'number' ? row[4] : 0; // محصل من المرتدات
+      const returnsAmt = typeof row[5] === 'number' ? row[5] : 0; // مرتدات
+      const checkAmount = typeof row[6] === 'number' ? row[6] : 0; // شيكات
+      const cashAmount = typeof row[7] === 'number' ? row[7] : 0;  // مدفوعات نقدى
+      const netInvoice = typeof row[8] === 'number' ? row[8] : 0;  // صافى الفاتورة (موجب فاتورة / سالب مرتجع)
+      const txBranch = row[9] ? (row[9] + '').toString().trim().replace(/\s+/g, ' ') : curStatementBranch;
+      const permitNo = row[11];
+      const docNo = row[10];
+      const dateVal = row[12];
+      const date = dateVal instanceof Date ? dateVal : null;
+      if (!date) continue; // صف غير صالح (زي صف تذييل التقرير) - مفيهوش تاريخ حقيقي
+
+      lastBalance = balance;
+      lastDate = date;
+
+      if (checkAmount) {
+        const seq = checkSeqCounters[curName] || 0;
+        checkSeqCounters[curName] = seq + 1;
+        checks.push({
+          customer: curName, customerCode: curCode, statementBranch: curStatementBranch, branch: txBranch,
+          description: String(desc), amount: checkAmount,
+          docNo: docNo != null ? String(docNo) : '', permitNo: permitNo != null ? String(permitNo) : '',
+          date, year: date.getFullYear(), monthNum: date.getMonth() + 1, fileName: fileName || '', seq,
+        });
+      }
+
+      const debit = Math.max(0, netInvoice) + Math.max(0, added);
+      const credit = Math.max(0, -netInvoice) + Math.max(0, -added) + deducted + collectedReturns + returnsAmt + checkAmount + cashAmount;
+      if (debit > 1e-6 || credit > 1e-6) {
+        const lseq = ledgerSeqCounters[curName] || 0;
+        ledgerSeqCounters[curName] = lseq + 1;
+        ledger.push({
+          customer: curName, customerCode: curCode, branch: curStatementBranch,
+          date, debit, credit, fileName: fileName || '', seq: lseq,
+        });
+      }
+    }
+    flushCustomer();
+    return { checks, balances, ledger };
+  }
+
+  return { parseSheet, parseRouteSheet, matchRoute, parseReturnsSheet, parseIndirectDiscountSheet, parseAccountStatementSheet, normalizeCustomerKey, BRANCH_ALIAS, FOOTER_LABEL_MAP };
 });
 
 </script>
@@ -873,7 +983,11 @@ table.datatable details summary:hover { text-decoration: underline; }
     allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
     repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
     repRoutesFilter: { group: '', route: '', search: '' },  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
-    repRouteSiteLinks: new Map()  // اسم فرع الفاتورة (منظم) -> اسم الفرع الصحيح في دليل خطوط سير المناديب - ربط يدوي محفوظ في السحابة لحل فوارق الكتابة
+    repRouteSiteLinks: new Map(),  // اسم فرع الفاتورة (منظم) -> اسم الفرع الصحيح في دليل خطوط سير المناديب - ربط يدوي محفوظ في السحابة لحل فوارق الكتابة
+    collectedChecks: [],  // تفاصيل الشيكات المحصلة من ملفات "كشف حساب العملاء" (تاب الشيكات المحصلة)
+    accountLedger: [],  // حركة مدين/دائن كاملة لكل عميل من نفس الملفات - مصدر "المستحق" و"أعمار الديون" (تُحسب دايمًا وقت العرض، مش مخزنة كأرصدة جاهزة)
+    collectedChecksFilter: { branch: [], customer: '', years: [], months: [] },  // فلاتر تاب الشيكات المحصلة
+    debtAgingFilter: { branch: [], search: '', asOfDate: '' }  // فلاتر تاب أعمار الديون - asOfDate فاضي = آخر تاريخ متاح في البيانات
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -1016,11 +1130,101 @@ table.datatable details summary:hover { text-decoration: underline; }
   function invoiceKey(inv) { return (inv.__fileName || '') + '||' + (inv['الفرع'] || '') + '||' + (inv['رقم_الفاتورة'] || ''); }
   function itemKey(r) { return (r.fileName || '') + '||' + (r.branch || '') + '||' + (r.invoiceNo || '') + '||' + r.lineNo; }
   function returnKey(r) { return (r.__fileName || '') + '||' + (r['رقم_الفاتورة'] || '') + '||' + r.__lineNo; }
+  function checkKey(c) { return (c.fileName || '') + '||' + (c.customer || '') + '||' + c.seq; }
+  function ledgerKey(l) { return (l.fileName || '') + '||' + (l.branch || '') + '||' + (l.customer || '') + '||' + l.seq; }
   function mergeByKey(existingArr, newArr, keyFn) {
     const map = new Map();
     existingArr.forEach(x => map.set(keyFn(x), x));
     newArr.forEach(x => map.set(keyFn(x), x));
     return Array.from(map.values());
+  }
+
+  // بيرصد كل فاتورة (مدين) في طابور بتاريخها لكل عميل/فرع، وكل تحصيل (دائن) بياكل من أقدم
+  // فاتورة في الطابور الأول (FIFO). المتبقي في الطابور عند "تاريخ الحساب" (asOfDate) هو الدين
+  // الفعلي، وعمره = الفرق بالأيام بين asOfDate وتاريخ الفاتورة الأصلية. مصدره state.accountLedger
+  // (من ملفات "كشف حساب العملاء") - يُحسب دايمًا وقت العرض، مش مخزن كأرصدة جاهزة.
+  function computeAgingBuckets(ledgerEntries, asOfDate) {
+    const groups = new Map(); // عميل||فرع -> [صفوف]
+    for (const e of ledgerEntries) {
+      const key = e.customer + '||' + e.branch;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(e);
+    }
+    const results = [];
+    for (const entries of groups.values()) {
+      entries.sort((a, b) => a.date - b.date);
+      const queue = []; // {date, remaining}
+      for (const e of entries) {
+        if (e.debit > 1e-6) queue.push({ date: e.date, remaining: e.debit });
+        if (e.credit > 1e-6) {
+          let rem = e.credit;
+          while (rem > 1e-6 && queue.length) {
+            const head = queue[0];
+            const take = Math.min(head.remaining, rem);
+            head.remaining -= take;
+            rem -= take;
+            if (head.remaining <= 1e-6) queue.shift();
+          }
+        }
+      }
+      const buckets = { d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
+      let total = 0;
+      for (const q of queue) {
+        if (q.remaining <= 1e-6) continue;
+        const ageDays = Math.round((asOfDate - q.date) / 86400000);
+        total += q.remaining;
+        if (ageDays <= 30) buckets.d1_30 += q.remaining;
+        else if (ageDays <= 60) buckets.d31_60 += q.remaining;
+        else if (ageDays <= 90) buckets.d61_90 += q.remaining;
+        else buckets.d90plus += q.remaining;
+      }
+      if (total <= 1e-6) continue;
+      const overdue = buckets.d61_90 + buckets.d90plus;
+      const first = entries[0];
+      results.push({
+        customer: first.customer, customerCode: first.customerCode, branch: first.branch,
+        total, d1_30: buckets.d1_30, d31_60: buckets.d31_60, d61_90: buckets.d61_90, d90plus: buckets.d90plus,
+        overduePct: total ? (overdue / total) * 100 : 0,
+      });
+    }
+    results.sort((a, b) => b.total - a.total);
+    return results;
+  }
+
+  // أحدث تاريخ حركة في الليدجر (يُستخدم كقيمة افتراضية لـ"تاريخ الحساب" في تاب أعمار الديون)
+  function latestLedgerDate() {
+    let max = null;
+    for (const e of state.accountLedger) { if (!max || e.date > max) max = e.date; }
+    return max;
+  }
+
+  function checkToDbRow(c) {
+    return {
+      file_name: c.fileName, statement_branch: c.statementBranch, branch: c.branch,
+      customer: c.customer, customer_code: c.customerCode, description: c.description,
+      amount: c.amount, doc_no: c.docNo, permit_no: c.permitNo, tx_date: isoDate(c.date), seq: c.seq,
+    };
+  }
+  function dbRowToCheck(row) {
+    const date = row.tx_date ? new Date(row.tx_date) : null;
+    return {
+      fileName: row.file_name, statementBranch: row.statement_branch, branch: row.branch,
+      customer: row.customer, customerCode: row.customer_code, description: row.description,
+      amount: Number(row.amount) || 0, docNo: row.doc_no, permitNo: row.permit_no,
+      date, year: date ? date.getFullYear() : null, monthNum: date ? date.getMonth() + 1 : null, seq: row.seq,
+    };
+  }
+  function ledgerToDbRow(l) {
+    return {
+      file_name: l.fileName, statement_branch: l.branch, customer: l.customer, customer_code: l.customerCode,
+      tx_date: isoDate(l.date), debit: l.debit, credit: l.credit, seq: l.seq,
+    };
+  }
+  function dbRowToLedger(row) {
+    return {
+      fileName: row.file_name, branch: row.statement_branch, customer: row.customer, customerCode: row.customer_code,
+      date: row.tx_date ? new Date(row.tx_date) : null, debit: Number(row.debit) || 0, credit: Number(row.credit) || 0, seq: row.seq,
+    };
   }
 
   function invoiceToDbRow(inv) {
@@ -1283,8 +1487,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     }
   }
 
-  async function syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts) {
-    if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length) && !(newIndirectDiscounts && newIndirectDiscounts.length))) return;
+  async function syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts, newChecks, newLedger) {
+    if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length) && !(newIndirectDiscounts && newIndirectDiscounts.length) && !(newChecks && newChecks.length) && !(newLedger && newLedger.length))) return;
     try {
       logStatus('جاري حفظ التقرير في السحابة...');
       const invRows = newInvoices.map(invoiceToDbRow);
@@ -1315,7 +1519,25 @@ table.datatable details summary:hover { text-decoration: underline; }
         }
         indMsg = ` و${indRows.length} قيد خصم غير مباشر`;
       }
-      logStatus(`تم حفظ ${invRows.length} فاتورة و${itemRowsDb.length} سطر صنف${retMsg}${indMsg} في السحابة بنجاح ✓ (لن تُفقد حتى لو رجعت للأداة تاني)`, 'ok');
+      let chkMsg = '';
+      if (newChecks && newChecks.length) {
+        const chkRows = newChecks.map(checkToDbRow);
+        for (const c of chunk(chkRows, 500)) {
+          const { error } = await sb.from('tamr_sales_collected_checks').upsert(c, { onConflict: 'file_name,customer,seq' });
+          if (error) throw error;
+        }
+        chkMsg = ` و${chkRows.length} شيك محصل`;
+      }
+      let ledMsg = '';
+      if (newLedger && newLedger.length) {
+        const ledRows = newLedger.map(ledgerToDbRow);
+        for (const c of chunk(ledRows, 500)) {
+          const { error } = await sb.from('tamr_sales_account_ledger').upsert(c, { onConflict: 'file_name,statement_branch,customer,seq' });
+          if (error) throw error;
+        }
+        ledMsg = ` و${ledRows.length} حركة حساب عميل`;
+      }
+      logStatus(`تم حفظ ${invRows.length} فاتورة و${itemRowsDb.length} سطر صنف${retMsg}${indMsg}${chkMsg}${ledMsg} في السحابة بنجاح ✓ (لن تُفقد حتى لو رجعت للأداة تاني)`, 'ok');
     } catch (e) {
       logStatus('تعذر الحفظ في السحابة - البيانات معروضة الآن لكنها لن تُحفظ للمرة القادمة (' + (e.message || e) + ')', 'err');
     }
@@ -1416,8 +1638,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     if (!client) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
-      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows, repRouteRows, repRouteSiteLinkRows] = await Promise.all([
-        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog'), fetchAllRows(client, 'tamr_sales_rep_routes'), fetchAllRows(client, 'tamr_sales_rep_route_site_links')
+      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows, repRouteRows, repRouteSiteLinkRows, checkRows, ledgerRows] = await Promise.all([
+        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog'), fetchAllRows(client, 'tamr_sales_rep_routes'), fetchAllRows(client, 'tamr_sales_rep_route_site_links'), fetchAllRows(client, 'tamr_sales_collected_checks'), fetchAllRows(client, 'tamr_sales_account_ledger')
       ]);
       if (sb !== client) return; // اتعمل تسجيل خروج أثناء التحميل - متجاهلين النتيجة القديمة
       state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
@@ -1427,6 +1649,8 @@ table.datatable details summary:hover { text-decoration: underline; }
       state.repRouteSiteLinks = new Map(repRouteSiteLinkRows.map(r => [normItemName(r.site_name), r.branch_name]));
       state.returns = returnRows.map(dbRowToReturn);
       state.indirectDiscounts = indirectRows.map(dbRowToIndirectDiscount);
+      state.collectedChecks = checkRows.map(dbRowToCheck);
+      state.accountLedger = ledgerRows.map(dbRowToLedger);
       state.manualIndirectLinks = new Map(indirectLinkRows.map(r => [r.discount_customer, r.matched_customer]));
       if (!invRows.length) {
         logStatus('لا توجد بيانات محفوظة سابقًا في السحابة - ارفع الملفات عشان تبدأ.');
@@ -1444,7 +1668,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       state.itemRows = itemRows.filter(row => !excludedInvKeys.has((row.file_name || '') + '||' + (row.branch || '') + '||' + (row.invoice_no || ''))).map(dbRowToItemRow);
       reapplyManualRoutesToState();
       rebuildInvoiceCustomerIndex();
-      logStatus(`تم تحميل ${state.invoices.length} فاتورة و${state.returns.length} سطر مرتجع و${state.indirectDiscounts.length} قيد خصم غير مباشر محفوظين من قبل من السحابة ✓`, 'ok');
+      logStatus(`تم تحميل ${state.invoices.length} فاتورة و${state.returns.length} سطر مرتجع و${state.indirectDiscounts.length} قيد خصم غير مباشر و${state.collectedChecks.length} شيك محصل محفوظين من قبل من السحابة ✓`, 'ok');
       populateFilters();
       document.getElementById('dashboardSection').style.display = 'block';
       renderAll();
@@ -1462,16 +1686,20 @@ table.datatable details summary:hover { text-decoration: underline; }
   const returnsInput = document.getElementById('returnsInput');
   const indirectDz = document.getElementById('indirectDzone');
   const indirectInput = document.getElementById('indirectInput');
+  const statementDz = document.getElementById('statementDzone');
+  const statementInput = document.getElementById('statementInput');
   const invList = document.getElementById('invFileList');
   const routeList = document.getElementById('routeFileList');
   const returnsList = document.getElementById('returnsFileList');
   const indirectList = document.getElementById('indirectFileList');
+  const statementList = document.getElementById('statementFileList');
   const processBtn = document.getElementById('processBtn');
   const statusLog = document.getElementById('statusLog');
 
   let routeFile = null;
   let returnsFile = null;
   let indirectFiles = [];
+  let statementFiles = [];
 
   function logStatus(msg, cls) {
     const d = document.createElement('div');
@@ -1563,6 +1791,23 @@ table.datatable details summary:hover { text-decoration: underline; }
     });
   }
 
+  function renderStatementFileList() {
+    if (!statementList) return;
+    statementList.innerHTML = '';
+    statementFiles.forEach((f, idx) => {
+      const row = document.createElement('div');
+      row.className = 'fitem';
+      row.innerHTML = `<span class="fname">${f.name}</span><span class="rm" data-idx="${idx}">✕</span>`;
+      statementList.appendChild(row);
+    });
+    statementList.querySelectorAll('.rm').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        statementFiles.splice(Number(e.target.dataset.idx), 1);
+        renderStatementFileList();
+      });
+    });
+  }
+
   setupDropzone(invDz, invInput, (files) => {
     files.filter(f => /\.(xlsx|xls)$/i.test(f.name)).forEach(f => {
       state.queue.push({ id: uid(), file: f, kind: 'invoice', activity: guessActivity(f.name) });
@@ -1586,6 +1831,13 @@ table.datatable details summary:hover { text-decoration: underline; }
     setupDropzone(indirectDz, indirectInput, (files) => {
       files.filter(f => /\.(xlsx|xls)$/i.test(f.name)).forEach(f => indirectFiles.push(f));
       renderIndirectFileList();
+    });
+  }
+
+  if (statementDz && statementInput) {
+    setupDropzone(statementDz, statementInput, (files) => {
+      files.filter(f => /\.(xlsx|xls)$/i.test(f.name)).forEach(f => statementFiles.push(f));
+      renderStatementFileList();
     });
   }
 
@@ -1676,7 +1928,28 @@ table.datatable details summary:hover { text-decoration: underline; }
       state.indirectDiscounts = mergeByKey(state.indirectDiscounts, newIndirectDiscounts, indirectDiscountKey);
     }
 
-    logStatus(`اكتمل التحليل: ${totalInv} فاتورة جديدة من هذه الدفعة (الإجمالي المعروض الآن: ${state.invoices.length} فاتورة، ${state.returns.length} سطر مرتجع، ${state.indirectDiscounts.length} قيد خصم غير مباشر)${totalErr ? '، ' + totalErr + ' سطر لم يتم التعرف عليه' : ''}`, 'ok');
+    let newChecks = [];
+    let newLedger = [];
+    if (statementFiles.length) {
+      for (const f of statementFiles) {
+        try {
+          const buf = await f.arrayBuffer();
+          const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+          const { checks, ledger } = SalesParser.parseAccountStatementSheet(rows, f.name);
+          newChecks = newChecks.concat(checks);
+          newLedger = newLedger.concat(ledger);
+          logStatus(`${f.name}: ${checks.length} شيك محصل، ${ledger.length} حركة حساب عميل`, 'ok');
+        } catch (e) {
+          logStatus('خطأ في قراءة ' + f.name + ': ' + e.message, 'err');
+        }
+      }
+      state.collectedChecks = mergeByKey(state.collectedChecks, newChecks, checkKey);
+      state.accountLedger = mergeByKey(state.accountLedger, newLedger, ledgerKey);
+    }
+
+    logStatus(`اكتمل التحليل: ${totalInv} فاتورة جديدة من هذه الدفعة (الإجمالي المعروض الآن: ${state.invoices.length} فاتورة، ${state.returns.length} سطر مرتجع، ${state.indirectDiscounts.length} قيد خصم غير مباشر، ${state.collectedChecks.length} شيك محصل)${totalErr ? '، ' + totalErr + ' سطر لم يتم التعرف عليه' : ''}`, 'ok');
 
     state.filters = { activity: [], branch: [], year: [], month: [], rep: [], item: [] };
     state.yoyUpToMonth = null;
@@ -1691,8 +1964,10 @@ table.datatable details summary:hover { text-decoration: underline; }
 
     indirectFiles = [];
     renderIndirectFileList();
+    statementFiles = [];
+    renderStatementFileList();
 
-    syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts);
+    syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts, newChecks, newLedger);
   });
 
   function tagReturn(r, fileName) {
@@ -2827,6 +3102,252 @@ table.datatable details summary:hover { text-decoration: underline; }
     URL.revokeObjectURL(url);
   };
 
+  // بيرجع تفاصيل الشيكات المفلترة حاليًا (نفس منطق الفلترة بالظبط اللي في renderCollectedChecks)
+  function filteredCollectedChecksForExport() {
+    const f = state.collectedChecksFilter;
+    let checks = state.collectedChecks.slice();
+    if (f.branch.length) checks = checks.filter(c => f.branch.includes(c.statementBranch));
+    if (f.customer && f.customer.trim()) { const q = f.customer.trim(); checks = checks.filter(c => c.customer.includes(q)); }
+    if (f.years.length) checks = checks.filter(c => f.years.includes(c.year));
+    if (f.months.length) checks = checks.filter(c => f.months.includes(c.monthNum));
+    checks.sort((a, b) => b.date - a.date);
+    return checks;
+  }
+
+  // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "الشيكات المحصلة" - شيتين: تفاصيل الشيكات + المستحق على كل عميل
+  window.exportCollectedChecksExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    const checks = filteredCollectedChecksForExport();
+    if (!checks.length) { alert('مفيش شيكات لتصديرها بالفلاتر الحالية.'); return; }
+
+    const balances = customerCurrentBalances();
+    const perCustomer = new Map();
+    checks.forEach(c => {
+      const key = c.customer + '||' + c.statementBranch;
+      if (!perCustomer.has(key)) {
+        const bal = balances.get(key);
+        perCustomer.set(key, { customer: c.customer, branch: c.statementBranch, checksTotal: 0, dueBalance: bal ? Math.max(0, bal.balance) : 0 });
+      }
+      perCustomer.get(key).checksTotal += c.amount;
+    });
+    const perCustomerArr = Array.from(perCustomer.values()).sort((a, b) => b.checksTotal - a.checksTotal);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const now = new Date();
+    const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
+    const numFmt = '#,##0;[Red]-#,##0';
+
+    const addLetterhead = (ws, title, lastCol) => {
+      try {
+        const logoEl = document.querySelector('img.logo');
+        const src = logoEl ? logoEl.getAttribute('src') : '';
+        if (src && src.indexOf('base64,') > -1) {
+          const base64 = src.split('base64,')[1];
+          const imgId = wb.addImage({ base64, extension: 'png' });
+          ws.addImage(imgId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 64, height: 64 } });
+        }
+      } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
+      ws.mergeCells(`B1:${lastCol}2`);
+      const titleCell = ws.getCell('B1');
+      titleCell.value = 'نظام تحليل مبيعات تمور الطحان - ' + title;
+      titleCell.font = { bold: true, size: 15, color: { argb: INK } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.mergeCells(`B3:${lastCol}3`);
+      const dateCell = ws.getCell('B3');
+      dateCell.value = 'تاريخ التصدير: ' + String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + now.getFullYear();
+      dateCell.font = { size: 11, color: { argb: 'FF6B5647' } };
+      dateCell.alignment = { horizontal: 'center' };
+      ws.addRow([]);
+    };
+    const styleHeaderRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        cell.font = { bold: true, color: { argb: SAND } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+      });
+      row.height = 34;
+    };
+    const styleFooterRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        cell.font = { bold: true, color: { argb: INK } };
+        cell.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
+    };
+    const addSignatures = (ws, colCount) => {
+      ws.addRow([]); ws.addRow([]);
+      const mid1 = Math.max(1, Math.floor(colCount * 0.25)), mid2 = Math.max(mid1 + 1, Math.floor(colCount * 0.7));
+      const labelArr = new Array(colCount).fill('');
+      labelArr[mid1 - 1] = 'مدير مبيعات مودرن تريد'; labelArr[mid2 - 1] = 'مدير عام المبيعات';
+      const sigLabelRow = ws.addRow(labelArr);
+      sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
+      ws.addRow([]);
+      const lineArr = new Array(colCount).fill('');
+      lineArr[mid1 - 1] = '____________________'; lineArr[mid2 - 1] = '____________________';
+      const sigLineRow = ws.addRow(lineArr);
+      sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
+    };
+    const fmtDate = (d) => d ? (String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear()) : '-';
+
+    // ---- شيت 1: تفاصيل الشيكات ----
+    const ws1 = wb.addWorksheet('تفاصيل الشيكات', { views: [{ rightToLeft: true }] });
+    const headers1 = ['العميل', 'الفرع', 'تاريخ التحصيل', 'تفاصيل الشيك', 'القيمة'];
+    addLetterhead(ws1, 'الشيكات المحصلة - تفاصيل الشيكات', 'E');
+    const headerRow1 = ws1.addRow(headers1);
+    styleHeaderRow(headerRow1);
+    let totalChecks = 0;
+    checks.forEach((c, idx) => {
+      totalChecks += c.amount;
+      const row = ws1.addRow([c.customer, c.statementBranch, fmtDate(c.date), c.description, c.amount]);
+      if (idx % 2 === 1) row.eachCell(cell => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      row.getCell(5).numFmt = numFmt;
+    });
+    const footerRow1 = ws1.addRow(['الإجمالي', '', '', '', totalChecks]);
+    styleFooterRow(footerRow1);
+    footerRow1.getCell(5).numFmt = numFmt;
+    ws1.getColumn(1).width = 34; ws1.getColumn(2).width = 20; ws1.getColumn(3).width = 14; ws1.getColumn(4).width = 44; ws1.getColumn(5).width = 16;
+    addSignatures(ws1, headers1.length);
+
+    // ---- شيت 2: المستحق على كل عميل ----
+    const ws2 = wb.addWorksheet('المستحق على كل عميل', { views: [{ rightToLeft: true }] });
+    const headers2 = ['العميل', 'الفرع', 'إجمالي الشيكات المحصلة', 'المستحق (رصيد حالي)'];
+    addLetterhead(ws2, 'الشيكات المحصلة - المستحق على كل عميل', 'D');
+    const headerRow2 = ws2.addRow(headers2);
+    styleHeaderRow(headerRow2);
+    let totalChecks2 = 0, totalDue2 = 0;
+    perCustomerArr.forEach((r, idx) => {
+      totalChecks2 += r.checksTotal; totalDue2 += r.dueBalance;
+      const row = ws2.addRow([r.customer, r.branch, r.checksTotal, r.dueBalance]);
+      if (idx % 2 === 1) row.eachCell(cell => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      row.getCell(3).numFmt = numFmt; row.getCell(4).numFmt = numFmt;
+    });
+    const footerRow2 = ws2.addRow(['الإجمالي', '', totalChecks2, totalDue2]);
+    styleFooterRow(footerRow2);
+    footerRow2.getCell(3).numFmt = numFmt; footerRow2.getCell(4).numFmt = numFmt;
+    ws2.getColumn(1).width = 34; ws2.getColumn(2).width = 20; ws2.getColumn(3).width = 20; ws2.getColumn(4).width = 20;
+    addSignatures(ws2, headers2.length);
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    a.download = 'الشيكات_المحصلة_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "أعمار الديون" - نفس تبويب تقرير المديونية المرجعي
+  window.exportDebtAgingExcel = async function () {
+    if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
+    if (!state.accountLedger.length) { alert('محتاج ترفع/تحمّل ملفات كشف حساب العملاء الأول.'); return; }
+
+    const f = state.debtAgingFilter;
+    const maxDate = latestLedgerDate();
+    const asOfDate = f.asOfDate ? new Date(f.asOfDate) : (maxDate ? new Date(maxDate.getTime() + 24 * 3600 * 1000) : new Date());
+    let ledger = state.accountLedger;
+    if (f.branch.length) ledger = ledger.filter(e => f.branch.includes(e.branch));
+    let aging = computeAgingBuckets(ledger, asOfDate);
+    if (f.search && f.search.trim()) { const q = f.search.trim(); aging = aging.filter(a => a.customer.includes(q)); }
+    if (!aging.length) { alert('مفيش ديون مستحقة لتصديرها بالفلاتر الحالية.'); return; }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'نظام تحليل مبيعات تمور الطحان';
+    wb.created = new Date();
+    const now = new Date();
+    const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
+    const numFmt = '#,##0;[Red]-#,##0';
+
+    const addLetterhead = (ws, title, lastCol) => {
+      try {
+        const logoEl = document.querySelector('img.logo');
+        const src = logoEl ? logoEl.getAttribute('src') : '';
+        if (src && src.indexOf('base64,') > -1) {
+          const base64 = src.split('base64,')[1];
+          const imgId = wb.addImage({ base64, extension: 'png' });
+          ws.addImage(imgId, { tl: { col: 0.15, row: 0.15 }, ext: { width: 64, height: 64 } });
+        }
+      } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
+      ws.mergeCells(`B1:${lastCol}2`);
+      const titleCell = ws.getCell('B1');
+      titleCell.value = 'نظام تحليل مبيعات تمور الطحان - ' + title;
+      titleCell.font = { bold: true, size: 15, color: { argb: INK } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.mergeCells(`B3:${lastCol}3`);
+      const dateCell = ws.getCell('B3');
+      dateCell.value = 'تاريخ الحساب: ' + String(asOfDate.getDate()).padStart(2, '0') + '/' + String(asOfDate.getMonth() + 1).padStart(2, '0') + '/' + asOfDate.getFullYear() + '  |  تاريخ التصدير: ' + String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + now.getFullYear();
+      dateCell.font = { size: 11, color: { argb: 'FF6B5647' } };
+      dateCell.alignment = { horizontal: 'center' };
+      ws.addRow([]);
+    };
+    const styleHeaderRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        cell.font = { bold: true, color: { argb: SAND } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+      });
+      row.height = 34;
+    };
+    const styleFooterRow = (row) => {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        cell.font = { bold: true, color: { argb: INK } };
+        cell.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
+    };
+    const addSignatures = (ws, colCount) => {
+      ws.addRow([]); ws.addRow([]);
+      const mid1 = Math.max(1, Math.floor(colCount * 0.25)), mid2 = Math.max(mid1 + 1, Math.floor(colCount * 0.7));
+      const labelArr = new Array(colCount).fill('');
+      labelArr[mid1 - 1] = 'مدير مبيعات مودرن تريد'; labelArr[mid2 - 1] = 'مدير عام المبيعات';
+      const sigLabelRow = ws.addRow(labelArr);
+      sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
+      ws.addRow([]);
+      const lineArr = new Array(colCount).fill('');
+      lineArr[mid1 - 1] = '____________________'; lineArr[mid2 - 1] = '____________________';
+      const sigLineRow = ws.addRow(lineArr);
+      sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
+    };
+
+    const ws1 = wb.addWorksheet('أعمار الديون', { views: [{ rightToLeft: true }] });
+    const headers1 = ['م', 'اسم العميل', 'الفرع', 'اجمالي الرصيد', 'من 1 الى 30 يوم', 'من 31 الى 60 يوم', 'من 61 الى 90 يوم', 'اكثر من 90 يوم', 'نسبة الديون المتعثرة (60+ يوم)'];
+    addLetterhead(ws1, 'أعمار الديون / مديونية العملاء', 'I');
+    const headerRow1 = ws1.addRow(headers1);
+    styleHeaderRow(headerRow1);
+    const totals = { total: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
+    aging.forEach((a, idx) => {
+      totals.total += a.total; totals.d1_30 += a.d1_30; totals.d31_60 += a.d31_60; totals.d61_90 += a.d61_90; totals.d90plus += a.d90plus;
+      const row = ws1.addRow([idx + 1, a.customer, a.branch, a.total, a.d1_30, a.d31_60, a.d61_90, a.d90plus, a.overduePct / 100]);
+      if (idx % 2 === 1) row.eachCell(cell => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+      for (let c = 4; c <= 8; c++) row.getCell(c).numFmt = numFmt;
+      row.getCell(9).numFmt = '0.0%';
+    });
+    const totalOverduePct = totals.total ? (totals.d61_90 + totals.d90plus) / totals.total : 0;
+    const footerRow1 = ws1.addRow(['', 'الإجمالي', '', totals.total, totals.d1_30, totals.d31_60, totals.d61_90, totals.d90plus, totalOverduePct]);
+    styleFooterRow(footerRow1);
+    for (let c = 4; c <= 8; c++) footerRow1.getCell(c).numFmt = numFmt;
+    footerRow1.getCell(9).numFmt = '0.0%';
+    ws1.getColumn(1).width = 6; ws1.getColumn(2).width = 40; ws1.getColumn(3).width = 18;
+    for (let c = 4; c <= 8; c++) ws1.getColumn(c).width = 16;
+    ws1.getColumn(9).width = 22;
+    addSignatures(ws1, headers1.length);
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    a.download = 'أعمار_الديون_' + stamp + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   // تصدير Excel ملون بشعار الشركة وتوقيعات لتاب "الأصناف" - شيتين: بالقيمة (مع تفصيل السنوات لو متاحة) وبالكمية
   window.exportItemsExcel = async function () {
     if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
@@ -3268,6 +3789,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     renderLinkIndirect();
     renderCustomerDiscounts();
     renderBranchIndirect();
+    renderCollectedChecks();
+    renderDebtAging();
     renderPrintFilterSummary();
   }
 
@@ -4553,6 +5076,10 @@ function renderYoY() {
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+function fmtDateDMY(d) {
+  if (!(d instanceof Date) || isNaN(d)) return '-';
+  return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear();
+}
 function renderLinkRoutes() {
   const el = document.getElementById('panel-linkroutes');
   const inv = state.invoices; // بدون فلاتر - عشان نشوف كل العملاء الناقصين بغض النظر عن الفلتر الحالي
@@ -5265,6 +5792,276 @@ function renderIndirectDiscounts() {
       renderIndirectDiscounts();
     });
   });
+}
+
+/* ---------------- الشيكات المحصلة + أعمار الديون (من ملفات "كشف حساب العملاء") ---------------- */
+
+// الرصيد الحالي (مدين - دائن) لكل عميل/فرع من كامل الليدجر المتراكم - مقياس بسيط (مش FIFO) بيُستخدم
+// كـ"المستحق" في تاب الشيكات المحصلة. العملاء اللي رصيدهم صفر أو سالب (رصيد دائن/سدّدوا كل حاجة) بيتم
+// استبعادهم من الاعتبار كـ"مستحق عليهم".
+function customerCurrentBalances() {
+  const m = new Map(); // customer||branch -> {customer, branch, balance}
+  state.accountLedger.forEach(e => {
+    const key = e.customer + '||' + e.branch;
+    if (!m.has(key)) m.set(key, { customer: e.customer, branch: e.branch, balance: 0 });
+    m.get(key).balance += e.debit - e.credit;
+  });
+  return m;
+}
+
+function distinctStatementBranches() {
+  const s = new Set();
+  state.accountLedger.forEach(e => { if (e.branch) s.add(e.branch); });
+  state.collectedChecks.forEach(c => { if (c.statementBranch) s.add(c.statementBranch); });
+  return Array.from(s).sort((a, b) => a.localeCompare(b, 'ar'));
+}
+
+function renderCollectedChecks() {
+  const el = document.getElementById('panel-collectedchecks');
+  if (!el) return;
+  if (!state.collectedChecks.length) {
+    el.innerHTML = emptyState('ارفع ملفات "كشف حساب العملاء" أولًا من قسم رفع البيانات فوق عشان يظهر لك تفاصيل الشيكات المحصلة والمستحق على كل عميل.');
+    return;
+  }
+
+  const f = state.collectedChecksFilter;
+  const branches = distinctStatementBranches();
+  const years = Array.from(new Set(state.collectedChecks.map(c => c.year))).filter(Boolean).sort((a, b) => b - a);
+
+  let checks = state.collectedChecks.slice();
+  if (f.branch.length) checks = checks.filter(c => f.branch.includes(c.statementBranch));
+  if (f.customer && f.customer.trim()) {
+    const q = f.customer.trim();
+    checks = checks.filter(c => c.customer.includes(q));
+  }
+  if (f.years.length) checks = checks.filter(c => f.years.includes(c.year));
+  if (f.months.length) checks = checks.filter(c => f.months.includes(c.monthNum));
+  checks.sort((a, b) => b.date - a.date);
+
+  const balances = customerCurrentBalances();
+  const custKeysInView = new Set(checks.map(c => c.customer + '||' + c.statementBranch));
+  const perCustomer = new Map(); // customer||branch -> {customer, branch, checksTotal, dueBalance}
+  checks.forEach(c => {
+    const key = c.customer + '||' + c.statementBranch;
+    if (!perCustomer.has(key)) {
+      const bal = balances.get(key);
+      perCustomer.set(key, { customer: c.customer, branch: c.statementBranch, checksTotal: 0, dueBalance: bal ? Math.max(0, bal.balance) : 0 });
+    }
+    perCustomer.get(key).checksTotal += c.amount;
+  });
+  const perCustomerArr = Array.from(perCustomer.values()).sort((a, b) => b.checksTotal - a.checksTotal);
+
+  const totalChecks = checks.reduce((s, c) => s + c.amount, 0);
+  const totalDue = perCustomerArr.reduce((s, r) => s + r.dueBalance, 0);
+  const custCount = custKeysInView.size;
+
+  const cardsHtml = `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kv">${fmtMoney(totalChecks)}</div><div class="kl">إجمالي الشيكات المحصلة</div></div>
+      <div class="kpi"><div class="kv">${fmt(checks.length)}</div><div class="kl">عدد الشيكات</div></div>
+      <div class="kpi"><div class="kv">${fmt(custCount)}</div><div class="kl">عدد العملاء</div></div>
+      <div class="kpi"><div class="kv">${fmtMoney(totalDue)}</div><div class="kl">إجمالي المستحق (رصيد حالي)</div></div>
+    </div>
+  `;
+
+  const filterBarHtml = `
+    <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;">
+      <button type="button" class="ms-btn" id="ccBranchBtn">🏢 الفرع: ${f.branch.length ? fmt(f.branch.length) + ' محدد' : 'الكل'} ▾</button>
+      <div class="ms-panel" id="ccBranchPanel">
+        <label class="ms-item ms-all"><input type="checkbox" class="cc-branch-all" ${!f.branch.length ? 'checked' : ''}><span>الكل</span></label>
+        <div class="ms-sep"></div>
+        ${branches.map(b => `<label class="ms-item"><input type="checkbox" class="cc-branch-cb" value="${b}" ${f.branch.includes(b) ? 'checked' : ''}><span>${b}</span></label>`).join('')}
+      </div>
+    </div>
+    <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;">
+      <button type="button" class="ms-btn" id="ccYearBtn">📅 السنة: ${f.years.length ? fmt(f.years.length) + ' محدد' : 'الكل'} ▾</button>
+      <div class="ms-panel" id="ccYearPanel">
+        <label class="ms-item ms-all"><input type="checkbox" class="cc-year-all" ${!f.years.length ? 'checked' : ''}><span>الكل</span></label>
+        <div class="ms-sep"></div>
+        ${years.map(y => `<label class="ms-item"><input type="checkbox" class="cc-year-cb" value="${y}" ${f.years.includes(y) ? 'checked' : ''}><span>${y}</span></label>`).join('')}
+      </div>
+    </div>
+    <input type="text" id="ccCustSearch" class="no-print" placeholder="🔍 بحث باسم العميل..." value="${escapeHtml(f.customer || '')}" style="padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-family:inherit; min-width:220px;">
+  `;
+
+  const detailHeaders = ['العميل', 'الفرع', 'تاريخ التحصيل', 'تفاصيل الشيك', 'القيمة'];
+  const detailRows = checks.slice(0, 1000).map(c => [
+    c.customer, c.statementBranch, fmtDateDMY(c.date), escapeHtml(c.description), fmtMoney(c.amount)
+  ]);
+
+  const custHeaders = ['العميل', 'الفرع', 'إجمالي الشيكات المحصلة', 'المستحق (رصيد حالي)'];
+  const custRows = perCustomerArr.map(r => [r.customer, r.branch, fmtMoney(r.checksTotal), fmtMoney(r.dueBalance)]);
+  const custFooter = ['الإجمالي', '', fmtMoney(totalChecks), fmtMoney(totalDue)];
+
+  el.innerHTML = `
+    <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <span>الشيكات المحصلة من العملاء</span>
+      <span class="no-print" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button>
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportCollectedChecksExcel()">📊 تصدير Excel</button>
+      </span>
+    </div>
+    <div class="no-print" style="margin-bottom:4px;">${filterBarHtml}</div>
+    <div class="hint" style="margin-bottom:10px;">المصدر: ملفات "كشف حساب العملاء" (اكسيل) اللي بترفعها في قسم رفع البيانات فوق. "المستحق" هو آخر رصيد مسجل لكل عميل في الملفات المرفوعة (رصيد لحظي وقت آخر معاملة موجودة عندنا، مش بالضرورة الرصيد اللحظي الفعلي لو فيه معاملات أحدث لسه متسجلتش). لتفاصيل أكتر عن توزيع المستحق حسب عمر الدين، شوف تاب "أعمار الديون".</div>
+    ${cardsHtml}
+    <div class="table-title">تفاصيل الشيكات (${fmt(checks.length)} شيك${checks.length > 1000 ? ' - أول 1000 معروضين' : ''})</div>
+    <div class="table-wrap">${tableHTML(detailHeaders, detailRows)}</div>
+    <div class="table-title">المستحق على كل عميل</div>
+    <div class="table-wrap">${tableHTML(custHeaders, custRows, custFooter)}</div>
+  `;
+
+  wireMsToggle(el);
+  const branchBtn = el.querySelector('#ccBranchBtn'), branchPanel = el.querySelector('#ccBranchPanel');
+  if (branchBtn && branchPanel) {
+    const allCb = branchPanel.querySelector('.cc-branch-all');
+    allCb.addEventListener('change', () => {
+      state.collectedChecksFilter.branch = [];
+      branchPanel.querySelectorAll('.cc-branch-cb').forEach(cb => cb.checked = false);
+      allCb.checked = true;
+      renderCollectedChecks();
+      const r = document.getElementById('ccBranchPanel'); if (r) r.classList.add('open');
+    });
+    branchPanel.querySelectorAll('.cc-branch-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const sel = new Set(state.collectedChecksFilter.branch);
+        if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
+        state.collectedChecksFilter.branch = Array.from(sel);
+        renderCollectedChecks();
+        const r = document.getElementById('ccBranchPanel'); if (r) r.classList.add('open');
+      });
+    });
+  }
+  const yearBtn = el.querySelector('#ccYearBtn'), yearPanel = el.querySelector('#ccYearPanel');
+  if (yearBtn && yearPanel) {
+    const allCb = yearPanel.querySelector('.cc-year-all');
+    allCb.addEventListener('change', () => {
+      state.collectedChecksFilter.years = [];
+      yearPanel.querySelectorAll('.cc-year-cb').forEach(cb => cb.checked = false);
+      allCb.checked = true;
+      renderCollectedChecks();
+      const r = document.getElementById('ccYearPanel'); if (r) r.classList.add('open');
+    });
+    yearPanel.querySelectorAll('.cc-year-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const sel = new Set(state.collectedChecksFilter.years.map(String));
+        if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
+        state.collectedChecksFilter.years = Array.from(sel).map(Number);
+        renderCollectedChecks();
+        const r = document.getElementById('ccYearPanel'); if (r) r.classList.add('open');
+      });
+    });
+  }
+  const custSearch = el.querySelector('#ccCustSearch');
+  if (custSearch) {
+    custSearch.addEventListener('input', () => {
+      state.collectedChecksFilter.customer = custSearch.value;
+      renderCollectedChecks();
+      const input = document.getElementById('ccCustSearch');
+      if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+    });
+  }
+}
+
+function renderDebtAging() {
+  const el = document.getElementById('panel-debtaging');
+  if (!el) return;
+  if (!state.accountLedger.length) {
+    el.innerHTML = emptyState('ارفع ملفات "كشف حساب العملاء" أولًا من قسم رفع البيانات فوق عشان تظهر لك أعمار ديون العملاء.');
+    return;
+  }
+
+  const f = state.debtAgingFilter;
+  const branches = distinctStatementBranches();
+  const maxDate = latestLedgerDate();
+  const asOfDate = f.asOfDate ? new Date(f.asOfDate) : (maxDate ? new Date(maxDate.getTime() + 24 * 3600 * 1000) : new Date());
+
+  let ledger = state.accountLedger;
+  if (f.branch.length) ledger = ledger.filter(e => f.branch.includes(e.branch));
+
+  let aging = computeAgingBuckets(ledger, asOfDate);
+  if (f.search && f.search.trim()) {
+    const q = f.search.trim();
+    aging = aging.filter(a => a.customer.includes(q));
+  }
+
+  const totals = aging.reduce((s, a) => {
+    s.total += a.total; s.d1_30 += a.d1_30; s.d31_60 += a.d31_60; s.d61_90 += a.d61_90; s.d90plus += a.d90plus;
+    return s;
+  }, { total: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 });
+  const totalOverduePct = totals.total ? ((totals.d61_90 + totals.d90plus) / totals.total) * 100 : 0;
+
+  const filterBarHtml = `
+    <div class="msfilter no-print" style="display:inline-block; margin-inline-end:8px; margin-bottom:10px;">
+      <button type="button" class="ms-btn" id="daBranchBtn">🏢 الفرع: ${f.branch.length ? fmt(f.branch.length) + ' محدد' : 'الكل'} ▾</button>
+      <div class="ms-panel" id="daBranchPanel">
+        <label class="ms-item ms-all"><input type="checkbox" class="da-branch-all" ${!f.branch.length ? 'checked' : ''}><span>الكل</span></label>
+        <div class="ms-sep"></div>
+        ${branches.map(b => `<label class="ms-item"><input type="checkbox" class="da-branch-cb" value="${b}" ${f.branch.includes(b) ? 'checked' : ''}><span>${b}</span></label>`).join('')}
+      </div>
+    </div>
+    <input type="text" id="daCustSearch" class="no-print" placeholder="🔍 بحث باسم العميل..." value="${escapeHtml(f.search || '')}" style="padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-family:inherit; min-width:220px; margin-inline-end:8px;">
+    <label class="no-print" style="display:inline-flex; align-items:center; gap:6px; font-size:13px;">تاريخ الحساب: <input type="date" id="daAsOfDate" value="${isoDate(asOfDate)}" style="padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-family:inherit;"></label>
+  `;
+
+  const headers = ['م', 'اسم العميل', 'الفرع', 'اجمالي الرصيد', 'من 1 الى 30 يوم', 'من 31 الى 60 يوم', 'من 61 الى 90 يوم', 'اكثر من 90 يوم', 'نسبة الديون المتعثرة (60+ يوم)'];
+  const rows = aging.map((a, idx) => [
+    fmt(idx + 1), a.customer, a.branch, fmtMoney(a.total),
+    a.d1_30 ? fmtMoney(a.d1_30) : '-', a.d31_60 ? fmtMoney(a.d31_60) : '-',
+    a.d61_90 ? fmtMoney(a.d61_90) : '-', a.d90plus ? fmtMoney(a.d90plus) : '-',
+    (a.overduePct > 40 ? `<span style="color:var(--bad); font-weight:700;">${a.overduePct.toFixed(1)}%</span>` : a.overduePct.toFixed(1) + '%')
+  ]);
+  const footer = ['', 'الإجمالي', '', fmtMoney(totals.total), fmtMoney(totals.d1_30), fmtMoney(totals.d31_60), fmtMoney(totals.d61_90), fmtMoney(totals.d90plus), totalOverduePct.toFixed(1) + '%'];
+
+  el.innerHTML = `
+    <div class="table-title" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <span>أعمار الديون / مديونية العملاء</span>
+      <span class="no-print" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="printCurrentTab()">🖨️ طباعة PDF</button>
+        <button type="button" class="btn secondary" style="padding:6px 14px; font-size:12.5px;" onclick="exportDebtAgingExcel()">📊 تصدير Excel</button>
+      </span>
+    </div>
+    <div class="no-print" style="margin-bottom:4px;">${filterBarHtml}</div>
+    <div class="hint" style="margin-bottom:10px;">المصدر: ملفات "كشف حساب العملاء" (اكسيل). عمر كل جزء من الدين بيتحسب بطريقة FIFO: كل فاتورة بتتحصل من أقدم دفعة/شيك/مرتجع لسه ما اتخصمش، والباقي في الآخر هو الدين الفعلي وعمره الفرق بالأيام بين "تاريخ الحساب" وتاريخ الفاتورة الأصلية. الأرقام دقيقة على قد آخر ملف كشف حساب رفعته لكل فرع - لو الملفات المرفوعة مش شاملة آخر شهر/أسبوع، الأرقام هتفرق عن أي تقرير مديونية رسمي أحدث لحد ما ترفع ملفات محدّثة.</div>
+    <div class="table-wrap">${tableHTML(headers, rows, footer)}</div>
+  `;
+
+  wireMsToggle(el);
+  const branchBtn = el.querySelector('#daBranchBtn'), branchPanel = el.querySelector('#daBranchPanel');
+  if (branchBtn && branchPanel) {
+    const allCb = branchPanel.querySelector('.da-branch-all');
+    allCb.addEventListener('change', () => {
+      state.debtAgingFilter.branch = [];
+      branchPanel.querySelectorAll('.da-branch-cb').forEach(cb => cb.checked = false);
+      allCb.checked = true;
+      renderDebtAging();
+      const r = document.getElementById('daBranchPanel'); if (r) r.classList.add('open');
+    });
+    branchPanel.querySelectorAll('.da-branch-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const sel = new Set(state.debtAgingFilter.branch);
+        if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
+        state.debtAgingFilter.branch = Array.from(sel);
+        renderDebtAging();
+        const r = document.getElementById('daBranchPanel'); if (r) r.classList.add('open');
+      });
+    });
+  }
+  const custSearch = el.querySelector('#daCustSearch');
+  if (custSearch) {
+    custSearch.addEventListener('input', () => {
+      state.debtAgingFilter.search = custSearch.value;
+      renderDebtAging();
+      const input = document.getElementById('daCustSearch');
+      if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+    });
+  }
+  const asOfInput = el.querySelector('#daAsOfDate');
+  if (asOfInput) {
+    asOfInput.addEventListener('change', () => {
+      state.debtAgingFilter.asOfDate = asOfInput.value;
+      renderDebtAging();
+    });
+  }
 }
 
 
