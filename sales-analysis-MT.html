@@ -981,7 +981,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
-    customerItemLookup: { customer: '', site: '', siteFilter: '', activity: '', years: [], months: [], lang: 'ar', monthlyCols: ['qty', 'price', 'value', 'count'] },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، siteFilter = فرع مختار من ضمن فروع العميل المختار (pills)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان. monthlyCols = الأعمدة الظاهرة (كمية/سعر/قيمة/عدد مرات شراء) جوه كل مجموعة شهر في العرض الموزّع بالشهور
+    customerItemLookup: { customer: '', site: '', siteFilter: '', activity: '', years: [], months: [], lang: 'ar', monthlyCols: ['qty', 'price', 'value', 'count', 'growth'] },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، siteFilter = فرع مختار من ضمن فروع العميل المختار (pills)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان. monthlyCols = الأعمدة الظاهرة (كمية/سعر/قيمة/عدد مرات شراء/نسبة النمو) جوه كل مجموعة شهر في العرض الموزّع بالشهور
     allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
     repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
     repRoutesFilter: { group: '', route: '', search: '' },  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
@@ -2348,15 +2348,49 @@ table.datatable details summary:hover { text-decoration: underline; }
     return { groups, perItem, orderedItems, groupTotals, grandTotal, grandQty };
   }
 
+  // بيدوّر جوه قائمة مجموعات الشهور (مرتبة زمنيًا) على أقرب مجموعة سابقة بنفس رقم الشهر في سنة أقدم
+  // من مجموعة معينة (بالـ index بتاعها) - أساس حساب "نسبة النمو % (نفس الشهر)" بين سنتين مختلفتين.
+  function findPriorYearGroup(groups, idx) {
+    const g = groups[idx];
+    for (let i = idx - 1; i >= 0; i--) {
+      if (groups[i].month === g.month && groups[i].year < g.year) return groups[i];
+    }
+    return null;
+  }
+  // بيحسب نسبة النمو (كسر عشري، مش نسبة مئوية جاهزة) لمجموعة معينة مقارنة بنفس الشهر في أقرب سنة أقدم
+  // موجودة ضمن المجموعات المعروضة. byGroupLike ممكن يكون Map خاص بصنف واحد (perItem.get(item)) أو
+  // groupTotals نفسها (لحساب نمو الإجمالي في صف الفوتر) - نفس الشكل (Map مفتاحه groupKey وقيمته فيها value).
+  // بيرجع null لو مفيش سنة أقدم للمقارنة أو لو قيمة السنة الأقدم صفر (مفيش أساس مقارنة).
+  function custLookupGrowthPct(byGroupLike, groups, idx) {
+    const baseGroup = findPriorYearGroup(groups, idx);
+    if (!baseGroup) return null;
+    const baseEntry = byGroupLike.get(baseGroup.key);
+    const curEntry = byGroupLike.get(groups[idx].key);
+    const baseVal = baseEntry ? baseEntry.value : 0;
+    const curVal = curEntry ? curEntry.value : 0;
+    if (!baseVal) return null;
+    return (curVal - baseVal) / baseVal;
+  }
+  // بيلوّن نسبة النمو (أخضر لو زيادة، أحمر لو نقصان) لعرضها في جدول الشاشة/تقرير الطباعة
+  function fmtGrowthPct(v) {
+    const pct = (v * 100).toFixed(1);
+    const sign = v > 0 ? '+' : '';
+    const color = v > 0 ? 'var(--good)' : (v < 0 ? 'var(--bad)' : 'inherit');
+    return `<span style="color:${color}; font-weight:600;">${sign}${pct}%</span>`;
+  }
+
   // الأعمدة الفرعية المتاحة جوه كل مجموعة شهر في جدول "أصناف عميل معين" الموزّع بالشهور، وترتيبها
-  // الثابت دايمًا (بغض النظر عن ترتيب اختيار اليوزر ليها من دروب داون "الأعمدة الظاهرة").
-  const CUST_LOOKUP_ALL_COLS = ['qty', 'price', 'value', 'count'];
+  // الثابت دايمًا (بغض النظر عن ترتيب اختيار اليوزر ليها من دروب داون "الأعمدة الظاهرة"). ctx بتتبعت
+  // لـget() الخاص بعمود "نسبة النمو" بس، وفيها {byGroup, groups, idx} اللازمين لإيجاد نفس الشهر في
+  // أقرب سنة أقدم.
+  const CUST_LOOKUP_ALL_COLS = ['qty', 'price', 'value', 'count', 'growth'];
   function custLookupColDefs(t) {
     return [
-      { key: 'qty', label: t.qty, get: (cell) => cell ? cell.qty : 0, isMoney: false },
-      { key: 'price', label: t.pieceUnitPrice, get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : 0, isMoney: true },
-      { key: 'value', label: t.value, get: (cell) => cell ? cell.value : 0, isMoney: true },
-      { key: 'count', label: t.purchaseCount, get: (cell) => cell ? cell.count : 0, isMoney: false }
+      { key: 'qty', label: t.qty, kind: 'num', get: (cell) => cell ? cell.qty : 0 },
+      { key: 'price', label: t.pieceUnitPrice, kind: 'money', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : 0 },
+      { key: 'value', label: t.value, kind: 'money', get: (cell) => cell ? cell.value : 0 },
+      { key: 'count', label: t.purchaseCount, kind: 'num', get: (cell) => cell ? cell.count : 0 },
+      { key: 'growth', label: t.growth, kind: 'pct', get: (cell, ctx) => custLookupGrowthPct(ctx.byGroup, ctx.groups, ctx.idx) }
     ];
   }
 
@@ -2397,9 +2431,12 @@ table.datatable details summary:hover { text-decoration: underline; }
         const cell = byGroup.get(g.key);
         rowTotal += cell ? cell.value : 0;
         const bg = ` style="background:${c.cellBg};"`;
+        const ctx = { byGroup, groups, idx };
         activeDefs.forEach(d => {
-          const v = d.get(cell);
-          const disp = v ? (d.isMoney ? fmtMoney(v) : fmt(v)) : '-';
+          const v = d.get(cell, ctx);
+          let disp;
+          if (d.kind === 'pct') disp = (v === null || v === undefined) ? '-' : fmtGrowthPct(v);
+          else disp = v ? (d.kind === 'money' ? fmtMoney(v) : fmt(v)) : '-';
           cells += `<td${bg}>${disp}</td>`;
         });
       });
@@ -2408,13 +2445,17 @@ table.datatable details summary:hover { text-decoration: underline; }
     });
 
     let footerCells = `<td colspan="3">${t.total}</td>`;
-    groups.forEach(g => {
+    groups.forEach((g, idx) => {
       const gt = groupTotals.get(g.key) || { qty: 0, value: 0, count: 0 };
       activeDefs.forEach(d => {
         let v = '-';
         if (d.key === 'qty') v = fmt(gt.qty);
         else if (d.key === 'value') v = fmtMoney(gt.value);
         else if (d.key === 'count') v = fmt(gt.count);
+        else if (d.key === 'growth') {
+          const gVal = custLookupGrowthPct(groupTotals, groups, idx);
+          v = (gVal === null || gVal === undefined) ? '-' : fmtGrowthPct(gVal);
+        }
         footerCells += `<td>${v}</td>`;
       });
     });
@@ -2703,7 +2744,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'كل الفترة المتاحة', allYears: 'كل السنوات', allMonths: 'كل الشهور',
       branchCount: 'عدد الفروع', itemCount: 'عدد الأصناف الموردة',
       itemCode: 'كود الصنف', item: 'الصنف', category: 'التصنيف', qty: 'الكمية', value: 'القيمة',
-      pieceUnitPrice: 'سعر القطعة (آخر توريد)', purchaseCount: 'عدد مرات الشراء',
+      pieceUnitPrice: 'سعر القطعة (آخر توريد)', purchaseCount: 'عدد مرات الشراء', growth: 'نسبة النمو % (نفس الشهر)',
       pctOfTotal: 'نسبة من إجمالي مبيعات العميل', total: 'الإجمالي',
       sigSales: 'مدير مبيعات مودرن تريد', sigGM: 'مدير عام المبيعات', sigLine: 'الاسم / التوقيع / التاريخ',
       months: ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
@@ -2713,7 +2754,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'All available period', allYears: 'All years', allMonths: 'All months',
       branchCount: 'Number of Branches', itemCount: 'Number of Items Supplied',
       itemCode: 'Item Code', item: 'Item', category: 'Category', qty: 'Quantity', value: 'Value',
-      pieceUnitPrice: 'Unit Price (Last Delivery)', purchaseCount: 'Purchase Count',
+      pieceUnitPrice: 'Unit Price (Last Delivery)', purchaseCount: 'Purchase Count', growth: 'Growth % (Same Month YoY)',
       pctOfTotal: '% of Customer Total Sales', total: 'Total',
       sigSales: 'Modern Trade Sales Manager', sigGM: 'General Sales Manager', sigLine: 'Name / Signature / Date',
       months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -2723,7 +2764,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Toute la période disponible', allYears: 'Toutes les années', allMonths: 'Tous les mois',
       branchCount: 'Nombre de succursales', itemCount: "Nombre d'articles fournis",
       itemCode: "Code d'article", item: 'Article', category: 'Catégorie', qty: 'Quantité', value: 'Valeur',
-      pieceUnitPrice: 'Prix unitaire (dernière livraison)', purchaseCount: "Nombre d'achats",
+      pieceUnitPrice: 'Prix unitaire (dernière livraison)', purchaseCount: "Nombre d'achats", growth: 'Croissance % (même mois, annuel)',
       pctOfTotal: '% du total des ventes du client', total: 'Total',
       sigSales: 'Directeur des ventes Modern Trade', sigGM: 'Directeur général des ventes', sigLine: 'Nom / Signature / Date',
       months: ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
@@ -2733,7 +2774,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Gesamter verfügbarer Zeitraum', allYears: 'Alle Jahre', allMonths: 'Alle Monate',
       branchCount: 'Anzahl der Filialen', itemCount: 'Anzahl der gelieferten Artikel',
       itemCode: 'Artikelcode', item: 'Artikel', category: 'Kategorie', qty: 'Menge', value: 'Wert',
-      pieceUnitPrice: 'Stückpreis (letzte Lieferung)', purchaseCount: 'Anzahl der Käufe',
+      pieceUnitPrice: 'Stückpreis (letzte Lieferung)', purchaseCount: 'Anzahl der Käufe', growth: 'Wachstum % (gleicher Monat, Jahresvergleich)',
       pctOfTotal: '% des Gesamtumsatzes des Kunden', total: 'Gesamt',
       sigSales: 'Verkaufsleiter Modern Trade', sigGM: 'Generalverkaufsleiter', sigLine: 'Name / Unterschrift / Datum',
       months: ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember']
@@ -2873,7 +2914,8 @@ table.datatable details summary:hover { text-decoration: underline; }
       { key: 'qty', label: 'الكمية', get: (cell) => cell ? cell.qty : null, numFmt: '#,##0', width: 12 },
       { key: 'price', label: 'سعر القطعة (آخر توريد)', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : null, numFmt: '#,##0.00', width: 16 },
       { key: 'value', label: 'القيمة', get: (cell) => cell ? cell.value : null, numFmt: '#,##0', width: 14 },
-      { key: 'count', label: 'عدد مرات الشراء', get: (cell) => cell ? cell.count : null, numFmt: '#,##0', width: 12 }
+      { key: 'count', label: 'عدد مرات الشراء', get: (cell) => cell ? cell.count : null, numFmt: '#,##0', width: 12 },
+      { key: 'growth', label: 'نسبة النمو % (نفس الشهر)', get: (cell, ctx) => custLookupGrowthPct(ctx.byGroup, ctx.groups, ctx.idx), numFmt: '0.0%', width: 18 }
     ];
     const activeCols = (lk.monthlyCols && lk.monthlyCols.length) ? lk.monthlyCols : CUST_LOOKUP_ALL_COLS;
     const activeDefs = XLSX_COL_DEFS.filter(d => activeCols.includes(d.key));
@@ -2953,8 +2995,9 @@ table.datatable details summary:hover { text-decoration: underline; }
           const startCol = 4 + gIdx * nSub;
           const cell = byGroup.get(g.key);
           rowTotal += cell ? cell.value : 0;
+          const ctx = { byGroup, groups: monthly.groups, idx: gIdx };
           activeDefs.forEach((d, j) => {
-            row.getCell(startCol + j).value = d.get(cell);
+            row.getCell(startCol + j).value = d.get(cell, ctx);
             row.getCell(startCol + j).numFmt = d.numFmt;
           });
         });
@@ -2975,13 +3018,14 @@ table.datatable details summary:hover { text-decoration: underline; }
         const startCol = 4 + idx * nSub;
         const gt = monthly.groupTotals.get(g.key) || { qty: 0, value: 0, count: 0 };
         activeDefs.forEach((d, j) => {
-          let v = null;
+          let v = null, numFmt = '#,##0';
           if (d.key === 'qty') v = gt.qty;
           else if (d.key === 'value') v = gt.value;
           else if (d.key === 'count') v = gt.count;
+          else if (d.key === 'growth') { v = custLookupGrowthPct(monthly.groupTotals, monthly.groups, idx); numFmt = '0.0%'; }
           const cell = footerRow.getCell(startCol + j);
           cell.value = v;
-          if (v !== null) cell.numFmt = '#,##0';
+          if (v !== null && v !== undefined) cell.numFmt = numFmt;
         });
       });
       footerRow.getCell(totalCols).value = monthly.grandTotal;
