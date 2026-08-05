@@ -2282,6 +2282,131 @@ table.datatable details summary:hover { text-decoration: underline; }
     return byItem;
   }
 
+  // بالتة ألوان دورية لتمييز كل شهر بلون مختلف في جدول "أصناف عميل معين خلال فترة معينة" (شاشة/PDF)
+  // وفي تصدير Excel (نسخة ARGB مقابلة). لو عدد الشهور المختارة أكتر من عدد الألوان، بتتكرر بالدور.
+  const CUST_LOOKUP_MONTH_COLORS = [
+    { head: '#3A2417', headText: '#EDE5D8', cellBg: '#FAF7F2' },
+    { head: '#4A5D2E', headText: '#EAF3DE', cellBg: '#F5F9EE' },
+    { head: '#7A3B23', headText: '#FAECE7', cellBg: '#FDF4F1' },
+    { head: '#3C3489', headText: '#EEEDFE', cellBg: '#F7F6FD' },
+    { head: '#185FA5', headText: '#E6F1FB', cellBg: '#F2F8FD' },
+    { head: '#993556', headText: '#FBEAF0', cellBg: '#FDF3F6' }
+  ];
+  const CUST_LOOKUP_MONTH_COLORS_XLSX = [
+    { head: 'FF3A2417', headText: 'FFEDE5D8', cellBg: 'FFFAF7F2' },
+    { head: 'FF4A5D2E', headText: 'FFEAF3DE', cellBg: 'FFF5F9EE' },
+    { head: 'FF7A3B23', headText: 'FFFAECE7', cellBg: 'FFFDF4F1' },
+    { head: 'FF3C3489', headText: 'FFEEEDFE', cellBg: 'FFF7F6FD' },
+    { head: 'FF185FA5', headText: 'FFE6F1FB', cellBg: 'FFF2F8FD' },
+    { head: 'FF993556', headText: 'FFFBEAF0', cellBg: 'FFFDF3F6' }
+  ];
+
+  // بيجمع صفوف "أصناف عميل معين خلال فترة معينة" (بعد كل الفلاتر) لكل صنف مقسّم على شهور الفاتورة
+  // الفعلية الموجودة فعلًا في البيانات دي (سنة+شهر مع بعض، مش شهر لوحده، عشان لو فيه نفس الشهر في
+  // سنتين مختلفتين يتعرضوا كعمودين منفصلين). بترجع: قائمة المجموعات (شهور) بالترتيب الزمني، إجمالي كل
+  // صنف مقسّم على كل مجموعة، ترتيب الأصناف حسب التصنيف والقيمة (زي باقي الجداول)، وإجماليات كل مجموعة.
+  function computeCustLookupMonthlyGroups(rows) {
+    const groupKeySet = new Set();
+    rows.forEach(r => { if (r.year && r.monthNum) groupKeySet.add(r.year + '-' + String(r.monthNum).padStart(2, '0')); });
+    const groups = Array.from(groupKeySet).sort().map(k => {
+      const [y, m] = k.split('-').map(Number);
+      return { key: k, year: y, month: m };
+    });
+
+    const perItem = new Map(); // item -> Map(groupKey -> {qty, value, count, lastPrice})
+    rows.forEach(r => {
+      if (!r.year || !r.monthNum) return;
+      const gk = r.year + '-' + String(r.monthNum).padStart(2, '0');
+      if (!perItem.has(r.item)) perItem.set(r.item, new Map());
+      const byGroup = perItem.get(r.item);
+      if (!byGroup.has(gk)) byGroup.set(gk, { qty: 0, value: 0, count: 0, lastPrice: null });
+      const g = byGroup.get(gk);
+      g.qty += (r.qtyCarton || 0) + (r.qtyPiece || 0);
+      g.value += r.total || 0;
+      g.count += 1;
+      if (r.date && (!g.lastPrice || r.date > g.lastPrice.date)) g.lastPrice = { date: r.date, price: r.pricePiece || 0 };
+    });
+
+    const itemTotals = Array.from(perItem.entries()).map(([item, byGroup]) => {
+      let sum = 0;
+      byGroup.forEach(g => { sum += g.value; });
+      return { key: item, sum, count: 0 };
+    });
+    const orderedItems = groupItemsByCategoryDesc(itemTotals.sort((a, b) => b.sum - a.sum)).map(x => x.key);
+
+    const groupTotals = new Map();
+    groups.forEach(g => groupTotals.set(g.key, { qty: 0, value: 0, count: 0 }));
+    let grandTotal = 0, grandQty = 0;
+    perItem.forEach(byGroup => {
+      byGroup.forEach((g, gk) => {
+        const t = groupTotals.get(gk);
+        if (t) { t.qty += g.qty; t.value += g.value; t.count += g.count; }
+        grandTotal += g.value; grandQty += g.qty;
+      });
+    });
+
+    return { groups, perItem, orderedItems, groupTotals, grandTotal, grandQty };
+  }
+
+  // بيبني HTML لجدول "أصناف عميل معين" الموزّع بالشهور (رأسين: اسم الشهر ممتد على 4 أعمدة، وتحته
+  // الكمية/السعر/القيمة/عدد مرات الشراء) - مستخدمة في عرض الشاشة وتقرير الطباعة، بلونين مختلفين لكل
+  // مجموعة شهر. opts.itemCodeFn/opts.itemCategoryFn بتحدد شكل خلية الكود/التصنيف (تفاعلية في الشاشة،
+  // نص عادي في تقرير الطباعة)، وopts.monthNames/opts.labels بتحدد اللغة.
+  function buildCustLookupMonthlyTableHTML(monthlyData, opts) {
+    const { groups, perItem, orderedItems, groupTotals, grandTotal, grandQty } = monthlyData;
+    const monthNames = opts.monthNames || MONTH_NAMES_AR;
+    const t = opts.labels;
+    const colorAt = (idx) => CUST_LOOKUP_MONTH_COLORS[idx % CUST_LOOKUP_MONTH_COLORS.length];
+
+    let headRow1 = `<th rowspan="2">${t.itemCode}</th><th rowspan="2">${t.item}</th><th rowspan="2">${t.category}</th>`;
+    groups.forEach((g, idx) => {
+      const c = colorAt(idx);
+      headRow1 += `<th colspan="4" style="background:${c.head}; color:${c.headText};">${monthNames[g.month - 1]} ${g.year}</th>`;
+    });
+    headRow1 += `<th rowspan="2">${t.total}</th>`;
+
+    let headRow2 = '';
+    groups.forEach((g, idx) => {
+      const c = colorAt(idx);
+      headRow2 += `<th style="background:${c.cellBg};">${t.qty}</th><th style="background:${c.cellBg};">${t.pieceUnitPrice}</th><th style="background:${c.cellBg};">${t.value}</th><th style="background:${c.cellBg};">${t.purchaseCount}</th>`;
+    });
+
+    let bodyRows = '';
+    orderedItems.forEach(item => {
+      const byGroup = perItem.get(item) || new Map();
+      let rowTotal = 0;
+      let cells = `<td>${opts.itemCodeFn(item)}</td><td>${escapeHtml(item)}</td><td>${opts.itemCategoryFn(item)}</td>`;
+      groups.forEach((g, idx) => {
+        const c = colorAt(idx);
+        const cell = byGroup.get(g.key);
+        const qty = cell ? cell.qty : 0;
+        const price = cell && cell.lastPrice ? cell.lastPrice.price : null;
+        const value = cell ? cell.value : 0;
+        const count = cell ? cell.count : 0;
+        rowTotal += value;
+        const bg = ` style="background:${c.cellBg};"`;
+        cells += `<td${bg}>${qty ? fmt(qty) : '-'}</td><td${bg}>${price ? fmtMoney(price) : '-'}</td><td${bg}>${value ? fmtMoney(value) : '-'}</td><td${bg}>${count ? fmt(count) : '-'}</td>`;
+      });
+      cells += `<td><b>${fmtMoney(rowTotal)}</b></td>`;
+      bodyRows += `<tr>${cells}</tr>`;
+    });
+
+    let footerCells = `<td colspan="3">${t.total}</td>`;
+    groups.forEach(g => {
+      const gt = groupTotals.get(g.key) || { qty: 0, value: 0, count: 0 };
+      footerCells += `<td>${fmt(gt.qty)}</td><td>-</td><td>${fmtMoney(gt.value)}</td><td>${fmt(gt.count)}</td>`;
+    });
+    footerCells += `<td>${fmtMoney(grandTotal)}</td>`;
+
+    return `<div class="table-wrap" style="overflow-x:auto;">
+      <table class="datatable cust-monthly-table">
+        <thead><tr>${headRow1}</tr><tr>${headRow2}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot><tr class="total-row">${footerCells}</tr></tfoot>
+      </table>
+    </div>`;
+  }
+
   /* ---------------- Filters (multi-select checkboxes) ---------------- */
   // القيم المتاحة لكل مفتاح فلتر - دالة مستقلة عشان تتعاد بسهولة من أي مكان (الشريط العلوي أو أي تاب
   // عنده نسخة محلية من نفس الفلتر، زي تاب "توزيع الخصم على الفروع").
@@ -2556,7 +2681,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'كل الفترة المتاحة', allYears: 'كل السنوات', allMonths: 'كل الشهور',
       branchCount: 'عدد الفروع', itemCount: 'عدد الأصناف الموردة',
       itemCode: 'كود الصنف', item: 'الصنف', category: 'التصنيف', qty: 'الكمية', value: 'القيمة',
-      pieceUnitPrice: 'سعر القطعة (آخر توريد)',
+      pieceUnitPrice: 'سعر القطعة (آخر توريد)', purchaseCount: 'عدد مرات الشراء',
       pctOfTotal: 'نسبة من إجمالي مبيعات العميل', total: 'الإجمالي',
       sigSales: 'مدير مبيعات مودرن تريد', sigGM: 'مدير عام المبيعات', sigLine: 'الاسم / التوقيع / التاريخ',
       months: ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
@@ -2566,7 +2691,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'All available period', allYears: 'All years', allMonths: 'All months',
       branchCount: 'Number of Branches', itemCount: 'Number of Items Supplied',
       itemCode: 'Item Code', item: 'Item', category: 'Category', qty: 'Quantity', value: 'Value',
-      pieceUnitPrice: 'Unit Price (Last Delivery)',
+      pieceUnitPrice: 'Unit Price (Last Delivery)', purchaseCount: 'Purchase Count',
       pctOfTotal: '% of Customer Total Sales', total: 'Total',
       sigSales: 'Modern Trade Sales Manager', sigGM: 'General Sales Manager', sigLine: 'Name / Signature / Date',
       months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -2576,7 +2701,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Toute la période disponible', allYears: 'Toutes les années', allMonths: 'Tous les mois',
       branchCount: 'Nombre de succursales', itemCount: "Nombre d'articles fournis",
       itemCode: "Code d'article", item: 'Article', category: 'Catégorie', qty: 'Quantité', value: 'Valeur',
-      pieceUnitPrice: 'Prix unitaire (dernière livraison)',
+      pieceUnitPrice: 'Prix unitaire (dernière livraison)', purchaseCount: "Nombre d'achats",
       pctOfTotal: '% du total des ventes du client', total: 'Total',
       sigSales: 'Directeur des ventes Modern Trade', sigGM: 'Directeur général des ventes', sigLine: 'Nom / Signature / Date',
       months: ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
@@ -2586,7 +2711,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Gesamter verfügbarer Zeitraum', allYears: 'Alle Jahre', allMonths: 'Alle Monate',
       branchCount: 'Anzahl der Filialen', itemCount: 'Anzahl der gelieferten Artikel',
       itemCode: 'Artikelcode', item: 'Artikel', category: 'Kategorie', qty: 'Menge', value: 'Wert',
-      pieceUnitPrice: 'Stückpreis (letzte Lieferung)',
+      pieceUnitPrice: 'Stückpreis (letzte Lieferung)', purchaseCount: 'Anzahl der Käufe',
       pctOfTotal: '% des Gesamtumsatzes des Kunden', total: 'Gesamt',
       sigSales: 'Verkaufsleiter Modern Trade', sigGM: 'Generalverkaufsleiter', sigLine: 'Name / Unterschrift / Datum',
       months: ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember']
@@ -2612,12 +2737,6 @@ table.datatable details summary:hover { text-decoration: underline; }
     const lkRows = (custSites.length && lk.siteFilter) ? baseRows.filter(r => r.site === lk.siteFilter) : baseRows;
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
 
-    const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
-    const custQtyOf = new Map();
-    lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
-    const lastPriceOf = lastPiecePriceMap(lkRows);
-    const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
-    const totalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
     const sites = new Set(lkRows.map(r => r.site).filter(Boolean));
 
     const yearsLabel = lk.years.length ? lk.years.join(', ') : t.allYears;
@@ -2627,13 +2746,36 @@ table.datatable details summary:hover { text-decoration: underline; }
     const targetLabel = lk.site ? t.branchName : t.customer;
     const targetValue = lk.site ? lk.site : lk.customer;
 
-    const headers = [t.itemCode, t.item, t.category, t.qty, t.pieceUnitPrice, t.value, t.pctOfTotal];
-    const rows = byItemCust.map(x => {
-      const pct = totalSum ? x.sum / totalSum : 0;
-      const lp = lastPriceOf.get(x.key);
-      return [resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmtPct(pct)];
-    });
-    const footer = ['-', t.total, '-', fmt(totalQty), '-', fmtMoney(totalSum), fmtPct(1)];
+    // لو محددين شهر أو أكتر، الجدول بيتحول لعمود منفصل ملون لكل شهر (كمية/سعر/قيمة/عدد مرات شراء)
+    // بدل الجدول المجمّع العادي - بنفس منطق العرض على الشاشة بالظبط.
+    let itemCount, tableBodyHtml;
+    if (lk.months.length) {
+      const monthlyData = computeCustLookupMonthlyGroups(lkRows);
+      if (!monthlyData.groups.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
+      itemCount = monthlyData.orderedItems.length;
+      tableBodyHtml = buildCustLookupMonthlyTableHTML(monthlyData, {
+        monthNames: t.months,
+        labels: t,
+        itemCodeFn: (item) => escapeHtml(resolveItemCode(item) || '-'),
+        itemCategoryFn: (item) => escapeHtml(resolveItemCategory(item) || '-')
+      });
+    } else {
+      const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
+      const custQtyOf = new Map();
+      lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+      const lastPriceOf = lastPiecePriceMap(lkRows);
+      const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
+      const totalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
+      itemCount = byItemCust.length;
+      const headers = [t.itemCode, t.item, t.category, t.qty, t.pieceUnitPrice, t.value, t.pctOfTotal];
+      const rows = byItemCust.map(x => {
+        const pct = totalSum ? x.sum / totalSum : 0;
+        const lp = lastPriceOf.get(x.key);
+        return [resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmtPct(pct)];
+      });
+      const footer = ['-', t.total, '-', fmt(totalQty), '-', fmtMoney(totalSum), fmtPct(1)];
+      tableBodyHtml = `<div class="table-wrap">${tableHTML(headers, rows, footer)}</div>`;
+    }
 
     const printArea = document.getElementById('custLookupPrintWrap');
     if (!printArea) return;
@@ -2646,9 +2788,9 @@ table.datatable details summary:hover { text-decoration: underline; }
         ${lk.activity ? `<b>${t.activityLabel}:</b> ${escapeHtml(lk.activity)} &nbsp;|&nbsp;` : ''}
         <b>${t.period}:</b> ${escapeHtml(periodLabel)} &nbsp;|&nbsp;
         <b>${t.branchCount}:</b> ${fmt(sites.size)} &nbsp;|&nbsp;
-        <b>${t.itemCount}:</b> ${fmt(byItemCust.length)}
+        <b>${t.itemCount}:</b> ${fmt(itemCount)}
       </div>
-      <div class="table-wrap">${tableHTML(headers, rows, footer)}</div>
+      ${tableBodyHtml}
       <div class="print-signature">
         <div class="sig-block">${t.sigSales}<div class="sig-line">${t.sigLine}</div></div>
         <div class="sig-block">${t.sigGM}<div class="sig-line">${t.sigLine}</div></div>
@@ -2680,12 +2822,15 @@ table.datatable details summary:hover { text-decoration: underline; }
     const lkRows = (custSites.length && lk.siteFilter) ? baseRows.filter(r => r.site === lk.siteFilter) : baseRows;
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
 
-    const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
+    const monthly = lk.months.length ? computeCustLookupMonthlyGroups(lkRows) : null;
+    if (monthly && !monthly.groups.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
+    const byItemCust = monthly ? null : groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
     const custQtyOf = new Map();
-    lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
-    const lastPriceOf = lastPiecePriceMap(lkRows);
-    const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
-    const totalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
+    if (!monthly) lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+    const lastPriceOf = monthly ? null : lastPiecePriceMap(lkRows);
+    const totalSum = monthly ? monthly.grandTotal : byItemCust.reduce((s, x) => s + x.sum, 0);
+    const totalQty = monthly ? monthly.grandQty : Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
+    const itemCount = monthly ? monthly.orderedItems.length : byItemCust.length;
 
     const targetLabel = lk.site ? 'الفرع' : 'العميل';
     const targetValue = lk.site ? lk.site : lk.customer;
@@ -2699,6 +2844,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     const ws = wb.addWorksheet('أصناف العميل', { views: [{ rightToLeft: true }] });
 
     const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
+    const totalCols = monthly ? (3 + monthly.groups.length * 4 + 1) : 7;
+    const colLetter = (n) => { let s = ''; while (n > 0) { const rem = (n - 1) % 26; s = String.fromCharCode(65 + rem) + s; n = Math.floor((n - 1) / 26); } return s; };
 
     try {
       const logoEl = document.querySelector('img.logo');
@@ -2710,13 +2857,13 @@ table.datatable details summary:hover { text-decoration: underline; }
       }
     } catch (e) { /* لو فشل تحميل الشعار، نكمل التصدير من غيره */ }
 
-    ws.mergeCells('B1:G2');
+    ws.mergeCells('B1:' + colLetter(totalCols) + '2');
     const titleCell = ws.getCell('B1');
     titleCell.value = 'نظام تحليل مبيعات تمور الطحان - أصناف ' + targetLabel + ' ' + targetValue;
     titleCell.font = { bold: true, size: 15, color: { argb: INK } };
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    ws.mergeCells('B3:G3');
+    ws.mergeCells('B3:' + colLetter(totalCols) + '3');
     const infoCell = ws.getCell('B3');
     const now = new Date();
     infoCell.value = `${targetLabel}: ${targetValue}${(!lk.site && lk.siteFilter) ? ' | الفرع: ' + lk.siteFilter : ''}${lk.activity ? ' | النشاط: ' + lk.activity : ''} | الفترة: ${periodLabel} | تاريخ التصدير: ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
@@ -2725,53 +2872,163 @@ table.datatable details summary:hover { text-decoration: underline; }
 
     ws.addRow([]);
 
-    const headers = ['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'نسبة من الإجمالي'];
-    const headerRow = ws.addRow(headers);
-    headerRow.eachCell(cell => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
-      cell.font = { bold: true, color: { argb: SAND } };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
-    });
-    headerRow.height = 30;
+    if (monthly) {
+      // جدول موزّع على أعمدة: مجموعة 4 أعمدة (كمية/سعر/قيمة/عدد مرات شراء) لكل شهر موجود في البيانات،
+      // بلون مختلف لكل شهر (نفس ألوان العرض على الشاشة)، مع عمود إجمالي القيمة في الآخر.
+      const headerRow1 = ws.addRow([]);
+      const headerRow2 = ws.addRow([]);
+      headerRow1.getCell(1).value = 'كود الصنف';
+      headerRow1.getCell(2).value = 'الصنف';
+      headerRow1.getCell(3).value = 'التصنيف';
+      headerRow1.getCell(totalCols).value = 'إجمالي القيمة';
+      [1, 2, 3, totalCols].forEach(c => {
+        ws.mergeCells(headerRow1.number, c, headerRow2.number, c);
+        const cell = headerRow1.getCell(c);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        cell.font = { bold: true, color: { argb: SAND } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      });
+      monthly.groups.forEach((g, idx) => {
+        const startCol = 4 + idx * 4;
+        const c = CUST_LOOKUP_MONTH_COLORS_XLSX[idx % CUST_LOOKUP_MONTH_COLORS_XLSX.length];
+        ws.mergeCells(headerRow1.number, startCol, headerRow1.number, startCol + 3);
+        const groupCell = headerRow1.getCell(startCol);
+        groupCell.value = MONTH_NAMES_AR[g.month - 1] + ' ' + g.year;
+        groupCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.head } };
+        groupCell.font = { bold: true, color: { argb: c.headText } };
+        groupCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        const subLabels = ['الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'];
+        subLabels.forEach((lbl, j) => {
+          const cell = headerRow2.getCell(startCol + j);
+          cell.value = lbl;
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.cellBg } };
+          cell.font = { bold: true, color: { argb: INK } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        });
+      });
+      headerRow1.height = 22; headerRow2.height = 30;
+      headerRow2.eachCell(cell => { cell.border = { bottom: { style: 'medium', color: { argb: INK } } }; });
 
-    byItemCust.forEach((x, idx) => {
-      const pct = totalSum ? x.sum / totalSum : 0;
-      const lp = lastPriceOf.get(x.key);
-      const row = ws.addRow([resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', custQtyOf.get(x.key) || 0, lp ? lp.price : null, x.sum, pct]);
-      if (idx % 2 === 1) {
-        row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
-      }
-      row.getCell(4).numFmt = '#,##0';
-      row.getCell(5).numFmt = '#,##0.00';
-      row.getCell(6).numFmt = '#,##0';
-      row.getCell(7).numFmt = '0.0%';
-      row.getCell(2).alignment = { horizontal: 'right' };
-    });
+      monthly.orderedItems.forEach((item, idx) => {
+        const byGroup = monthly.perItem.get(item) || new Map();
+        const row = ws.addRow([]);
+        row.getCell(1).value = resolveItemCode(item) || '-';
+        row.getCell(2).value = item;
+        row.getCell(3).value = resolveItemCategory(item) || '-';
+        let rowTotal = 0;
+        monthly.groups.forEach((g, gIdx) => {
+          const startCol = 4 + gIdx * 4;
+          const cell = byGroup.get(g.key);
+          const qty = cell ? cell.qty : 0;
+          const price = cell && cell.lastPrice ? cell.lastPrice.price : null;
+          const value = cell ? cell.value : 0;
+          const count = cell ? cell.count : 0;
+          rowTotal += value;
+          row.getCell(startCol).value = qty || null;
+          row.getCell(startCol + 1).value = price;
+          row.getCell(startCol + 2).value = value || null;
+          row.getCell(startCol + 3).value = count || null;
+          row.getCell(startCol).numFmt = '#,##0';
+          row.getCell(startCol + 1).numFmt = '#,##0.00';
+          row.getCell(startCol + 2).numFmt = '#,##0';
+          row.getCell(startCol + 3).numFmt = '#,##0';
+        });
+        row.getCell(totalCols).value = rowTotal;
+        row.getCell(totalCols).numFmt = '#,##0';
+        row.getCell(totalCols).font = { bold: true };
+        row.getCell(2).alignment = { horizontal: 'right' };
+        if (idx % 2 === 1) {
+          row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+        }
+      });
 
-    const footerRow = ws.addRow(['-', 'الإجمالي', '-', totalQty, null, totalSum, 1]);
-    footerRow.eachCell(cell => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
-      cell.font = { bold: true, color: { argb: INK } };
-      cell.border = { top: { style: 'medium', color: { argb: INK } } };
-    });
-    footerRow.getCell(4).numFmt = '#,##0';
-    footerRow.getCell(6).numFmt = '#,##0';
-    footerRow.getCell(7).numFmt = '0.0%';
+      const footerRow = ws.addRow([]);
+      footerRow.getCell(1).value = '-';
+      footerRow.getCell(2).value = 'الإجمالي';
+      ws.mergeCells(footerRow.number, 2, footerRow.number, 3);
+      monthly.groups.forEach((g, idx) => {
+        const startCol = 4 + idx * 4;
+        const gt = monthly.groupTotals.get(g.key) || { qty: 0, value: 0, count: 0 };
+        footerRow.getCell(startCol).value = gt.qty;
+        footerRow.getCell(startCol + 2).value = gt.value;
+        footerRow.getCell(startCol + 3).value = gt.count;
+        footerRow.getCell(startCol).numFmt = '#,##0';
+        footerRow.getCell(startCol + 2).numFmt = '#,##0';
+        footerRow.getCell(startCol + 3).numFmt = '#,##0';
+      });
+      footerRow.getCell(totalCols).value = monthly.grandTotal;
+      footerRow.getCell(totalCols).numFmt = '#,##0';
+      footerRow.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        cell.font = { bold: true, color: { argb: INK } };
+        cell.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
 
-    ws.getColumn(1).width = 14;
-    ws.getColumn(2).width = 42;
-    ws.getColumn(3).width = 20;
-    ws.getColumn(4).width = 14;
-    ws.getColumn(5).width = 20;
-    ws.getColumn(6).width = 16;
-    ws.getColumn(7).width = 16;
+      ws.getColumn(1).width = 14;
+      ws.getColumn(2).width = 32;
+      ws.getColumn(3).width = 18;
+      monthly.groups.forEach((g, idx) => {
+        const startCol = 4 + idx * 4;
+        ws.getColumn(startCol).width = 12;
+        ws.getColumn(startCol + 1).width = 16;
+        ws.getColumn(startCol + 2).width = 14;
+        ws.getColumn(startCol + 3).width = 12;
+      });
+      ws.getColumn(totalCols).width = 16;
+    } else {
+      const headers = ['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'نسبة من الإجمالي'];
+      const headerRow = ws.addRow(headers);
+      headerRow.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+        cell.font = { bold: true, color: { argb: SAND } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = { bottom: { style: 'medium', color: { argb: INK } } };
+      });
+      headerRow.height = 30;
+
+      byItemCust.forEach((x, idx) => {
+        const pct = totalSum ? x.sum / totalSum : 0;
+        const lp = lastPriceOf.get(x.key);
+        const row = ws.addRow([resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', custQtyOf.get(x.key) || 0, lp ? lp.price : null, x.sum, pct]);
+        if (idx % 2 === 1) {
+          row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
+        }
+        row.getCell(4).numFmt = '#,##0';
+        row.getCell(5).numFmt = '#,##0.00';
+        row.getCell(6).numFmt = '#,##0';
+        row.getCell(7).numFmt = '0.0%';
+        row.getCell(2).alignment = { horizontal: 'right' };
+      });
+
+      const footerRow = ws.addRow(['-', 'الإجمالي', '-', totalQty, null, totalSum, 1]);
+      footerRow.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
+        cell.font = { bold: true, color: { argb: INK } };
+        cell.border = { top: { style: 'medium', color: { argb: INK } } };
+      });
+      footerRow.getCell(4).numFmt = '#,##0';
+      footerRow.getCell(6).numFmt = '#,##0';
+      footerRow.getCell(7).numFmt = '0.0%';
+
+      ws.getColumn(1).width = 14;
+      ws.getColumn(2).width = 42;
+      ws.getColumn(3).width = 20;
+      ws.getColumn(4).width = 14;
+      ws.getColumn(5).width = 20;
+      ws.getColumn(6).width = 16;
+      ws.getColumn(7).width = 16;
+    }
 
     ws.addRow([]); ws.addRow([]);
-    const sigLabelRow = ws.addRow(['', 'مدير مبيعات مودرن تريد', '', '', '', 'مدير عام المبيعات', '']);
+    const sig2Col = totalCols - 1 >= 2 ? totalCols - 1 : totalCols;
+    const sigLabelRow = ws.addRow([]);
+    sigLabelRow.getCell(2).value = 'مدير مبيعات مودرن تريد';
+    sigLabelRow.getCell(sig2Col).value = 'مدير عام المبيعات';
     sigLabelRow.eachCell(cell => { if (cell.value) { cell.font = { bold: true, size: 12, color: { argb: INK } }; cell.alignment = { horizontal: 'center' }; } });
     ws.addRow([]);
-    const sigLineRow = ws.addRow(['', '____________________', '', '', '', '____________________', '']);
+    const sigLineRow = ws.addRow([]);
+    sigLineRow.getCell(2).value = '____________________';
+    sigLineRow.getCell(sig2Col).value = '____________________';
     sigLineRow.eachCell(cell => { if (cell.value) { cell.alignment = { horizontal: 'center' }; cell.font = { color: { argb: 'FF6B5647' } }; } });
 
     const buf = await wb.xlsx.writeBuffer();
@@ -4251,7 +4508,7 @@ function renderItems() {
           <button type="button" class="btn secondary" id="custLookupExcelBtn" style="padding:6px 14px; font-size:12.5px;">📊 تصدير Excel - تقرير العميل</button>
         </span>
       </div>
-      <div class="hint" style="margin-bottom:10px;">اختار العميل (أو دور على فرع بالاسم) - ولو ما حددتش سنة أو شهر هيوريك كل الفترة المتاحة له. الفلاتر دي مستقلة عن فلاتر الصفحة فوق.</div>
+      <div class="hint" style="margin-bottom:10px;">اختار العميل (أو دور على فرع بالاسم) - ولو ما حددتش سنة أو شهر هيوريك كل الفترة المتاحة له. لو حددت شهر أو أكتر من فلتر "الشهر"، الجدول هيتحول لعمود منفصل ملون لكل شهر (كمية/سعر/قيمة/عدد مرات شراء) جنب بعض عشان تقارن بينهم. الفلاتر دي مستقلة عن فلاتر الصفحة فوق.</div>
       <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px;">
         <div>
           <div class="hint" style="margin:0 0 4px;">النشاط</div>
@@ -4338,26 +4595,47 @@ function renderItems() {
     if (!lkRows.length) {
       resultEl.innerHTML = branchFilterHtml + '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>';
     } else {
-      const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
-      const custQtyOf = new Map();
-      lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
-      const lastPriceOf = lastPiecePriceMap(lkRows);
-      const lkTableRows = byItemCust.map(x => {
-        const lp = lastPriceOf.get(x.key);
-        return [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmt(x.count)];
-      });
-      const lkTotalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
-      const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
-      const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
-      const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), '-', fmtMoney(lkTotalSum), fmt(lkTotalCount)];
       const targetLabel = lk.site ? 'الفرع' : 'العميل';
       const targetName = lk.site ? lk.site : lk.customer;
       const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
       const branchNote = lk.siteFilter ? ` - فرع: ${escapeHtml(lk.siteFilter)}` : '';
-      resultEl.innerHTML = branchFilterHtml + `
-        <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}"${branchNote} في الفترة دي${activityNote}</div>
-        <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
-      `;
+
+      // لو اخترنا شهر واحد أو أكتر من فلتر "الشهر"، نعرض جدول موزّع على أعمدة (مجموعة أعمدة لكل
+      // شهر/سنة موجود فعليًا في البيانات) بدل الجدول المجمّع العادي - عشان نقدر نقارن الشهور جنب بعض.
+      if (lk.months.length) {
+        const monthlyData = computeCustLookupMonthlyGroups(lkRows);
+        if (!monthlyData.groups.length) {
+          resultEl.innerHTML = branchFilterHtml + '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>';
+        } else {
+          const monthlyHtml = buildCustLookupMonthlyTableHTML(monthlyData, {
+            monthNames: MONTH_NAMES_AR,
+            labels: CUST_REPORT_I18N.ar,
+            itemCodeFn: itemCodeCell,
+            itemCategoryFn: itemCategoryCell
+          });
+          resultEl.innerHTML = branchFilterHtml + `
+            <div class="hint" style="margin-bottom:8px;">${fmt(monthlyData.orderedItems.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}"${branchNote} موزّعين على ${fmt(monthlyData.groups.length)} شهر${activityNote}</div>
+            ${monthlyHtml}
+          `;
+        }
+      } else {
+        const byItemCust = groupItemsByCategoryDesc(groupSum(lkRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum));
+        const custQtyOf = new Map();
+        lkRows.forEach(r => { custQtyOf.set(r.item, (custQtyOf.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+        const lastPriceOf = lastPiecePriceMap(lkRows);
+        const lkTableRows = byItemCust.map(x => {
+          const lp = lastPriceOf.get(x.key);
+          return [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmt(x.count)];
+        });
+        const lkTotalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
+        const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
+        const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
+        const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), '-', fmtMoney(lkTotalSum), fmt(lkTotalCount)];
+        resultEl.innerHTML = branchFilterHtml + `
+          <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}"${branchNote} في الفترة دي${activityNote}</div>
+          <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
+        `;
+      }
     }
     const branchFilterInput = resultEl.querySelector('.cust-branch-filter-input');
     if (branchFilterInput) {
