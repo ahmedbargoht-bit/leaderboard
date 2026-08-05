@@ -981,7 +981,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
-    customerItemLookup: { customer: '', site: '', siteFilter: '', activity: '', years: [], months: [], lang: 'ar' },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، siteFilter = فرع مختار من ضمن فروع العميل المختار (pills)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان
+    customerItemLookup: { customer: '', site: '', siteFilter: '', activity: '', years: [], months: [], lang: 'ar', monthlyCols: ['qty', 'price', 'value', 'count'] },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، siteFilter = فرع مختار من ضمن فروع العميل المختار (pills)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان. monthlyCols = الأعمدة الظاهرة (كمية/سعر/قيمة/عدد مرات شراء) جوه كل مجموعة شهر في العرض الموزّع بالشهور
     allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
     repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
     repRoutesFilter: { group: '', route: '', search: '' },  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
@@ -2348,27 +2348,43 @@ table.datatable details summary:hover { text-decoration: underline; }
     return { groups, perItem, orderedItems, groupTotals, grandTotal, grandQty };
   }
 
-  // بيبني HTML لجدول "أصناف عميل معين" الموزّع بالشهور (رأسين: اسم الشهر ممتد على 4 أعمدة، وتحته
-  // الكمية/السعر/القيمة/عدد مرات الشراء) - مستخدمة في عرض الشاشة وتقرير الطباعة، بلونين مختلفين لكل
-  // مجموعة شهر. opts.itemCodeFn/opts.itemCategoryFn بتحدد شكل خلية الكود/التصنيف (تفاعلية في الشاشة،
-  // نص عادي في تقرير الطباعة)، وopts.monthNames/opts.labels بتحدد اللغة.
+  // الأعمدة الفرعية المتاحة جوه كل مجموعة شهر في جدول "أصناف عميل معين" الموزّع بالشهور، وترتيبها
+  // الثابت دايمًا (بغض النظر عن ترتيب اختيار اليوزر ليها من دروب داون "الأعمدة الظاهرة").
+  const CUST_LOOKUP_ALL_COLS = ['qty', 'price', 'value', 'count'];
+  function custLookupColDefs(t) {
+    return [
+      { key: 'qty', label: t.qty, get: (cell) => cell ? cell.qty : 0, isMoney: false },
+      { key: 'price', label: t.pieceUnitPrice, get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : 0, isMoney: true },
+      { key: 'value', label: t.value, get: (cell) => cell ? cell.value : 0, isMoney: true },
+      { key: 'count', label: t.purchaseCount, get: (cell) => cell ? cell.count : 0, isMoney: false }
+    ];
+  }
+
+  // بيبني HTML لجدول "أصناف عميل معين" الموزّع بالشهور (رأسين: اسم الشهر ممتد على عدد الأعمدة
+  // الفرعية الظاهرة، وتحته الأعمدة المختارة بس من كمية/سعر/قيمة/عدد مرات الشراء) - مستخدمة في عرض
+  // الشاشة وتقرير الطباعة، بلون مختلف لكل مجموعة شهر. opts.itemCodeFn/opts.itemCategoryFn بتحدد شكل
+  // خلية الكود/التصنيف (تفاعلية في الشاشة، نص عادي في تقرير الطباعة)، وopts.monthNames/opts.labels
+  // بتحدد اللغة، وopts.cols بتحدد الأعمدة الفرعية الظاهرة (افتراضيًا كلها).
   function buildCustLookupMonthlyTableHTML(monthlyData, opts) {
-    const { groups, perItem, orderedItems, groupTotals, grandTotal, grandQty } = monthlyData;
+    const { groups, perItem, orderedItems, groupTotals, grandTotal } = monthlyData;
     const monthNames = opts.monthNames || MONTH_NAMES_AR;
     const t = opts.labels;
     const colorAt = (idx) => CUST_LOOKUP_MONTH_COLORS[idx % CUST_LOOKUP_MONTH_COLORS.length];
+    const allDefs = custLookupColDefs(t);
+    const activeDefs = allDefs.filter(d => !opts.cols || opts.cols.includes(d.key));
+    const nSub = activeDefs.length || 1;
 
     let headRow1 = `<th rowspan="2">${t.itemCode}</th><th rowspan="2">${t.item}</th><th rowspan="2">${t.category}</th>`;
     groups.forEach((g, idx) => {
       const c = colorAt(idx);
-      headRow1 += `<th colspan="4" style="background:${c.head}; color:${c.headText};">${monthNames[g.month - 1]} ${g.year}</th>`;
+      headRow1 += `<th colspan="${nSub}" style="background:${c.head}; color:${c.headText};">${monthNames[g.month - 1]} ${g.year}</th>`;
     });
     headRow1 += `<th rowspan="2">${t.total}</th>`;
 
     let headRow2 = '';
     groups.forEach((g, idx) => {
       const c = colorAt(idx);
-      headRow2 += `<th style="background:${c.cellBg};">${t.qty}</th><th style="background:${c.cellBg};">${t.pieceUnitPrice}</th><th style="background:${c.cellBg};">${t.value}</th><th style="background:${c.cellBg};">${t.purchaseCount}</th>`;
+      activeDefs.forEach(d => { headRow2 += `<th style="background:${c.cellBg};">${d.label}</th>`; });
     });
 
     let bodyRows = '';
@@ -2379,13 +2395,13 @@ table.datatable details summary:hover { text-decoration: underline; }
       groups.forEach((g, idx) => {
         const c = colorAt(idx);
         const cell = byGroup.get(g.key);
-        const qty = cell ? cell.qty : 0;
-        const price = cell && cell.lastPrice ? cell.lastPrice.price : null;
-        const value = cell ? cell.value : 0;
-        const count = cell ? cell.count : 0;
-        rowTotal += value;
+        rowTotal += cell ? cell.value : 0;
         const bg = ` style="background:${c.cellBg};"`;
-        cells += `<td${bg}>${qty ? fmt(qty) : '-'}</td><td${bg}>${price ? fmtMoney(price) : '-'}</td><td${bg}>${value ? fmtMoney(value) : '-'}</td><td${bg}>${count ? fmt(count) : '-'}</td>`;
+        activeDefs.forEach(d => {
+          const v = d.get(cell);
+          const disp = v ? (d.isMoney ? fmtMoney(v) : fmt(v)) : '-';
+          cells += `<td${bg}>${disp}</td>`;
+        });
       });
       cells += `<td><b>${fmtMoney(rowTotal)}</b></td>`;
       bodyRows += `<tr>${cells}</tr>`;
@@ -2394,7 +2410,13 @@ table.datatable details summary:hover { text-decoration: underline; }
     let footerCells = `<td colspan="3">${t.total}</td>`;
     groups.forEach(g => {
       const gt = groupTotals.get(g.key) || { qty: 0, value: 0, count: 0 };
-      footerCells += `<td>${fmt(gt.qty)}</td><td>-</td><td>${fmtMoney(gt.value)}</td><td>${fmt(gt.count)}</td>`;
+      activeDefs.forEach(d => {
+        let v = '-';
+        if (d.key === 'qty') v = fmt(gt.qty);
+        else if (d.key === 'value') v = fmtMoney(gt.value);
+        else if (d.key === 'count') v = fmt(gt.count);
+        footerCells += `<td>${v}</td>`;
+      });
     });
     footerCells += `<td>${fmtMoney(grandTotal)}</td>`;
 
@@ -2756,6 +2778,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       tableBodyHtml = buildCustLookupMonthlyTableHTML(monthlyData, {
         monthNames: t.months,
         labels: t,
+        cols: (lk.monthlyCols && lk.monthlyCols.length) ? lk.monthlyCols : CUST_LOOKUP_ALL_COLS,
         itemCodeFn: (item) => escapeHtml(resolveItemCode(item) || '-'),
         itemCategoryFn: (item) => escapeHtml(resolveItemCategory(item) || '-')
       });
@@ -2844,7 +2867,18 @@ table.datatable details summary:hover { text-decoration: underline; }
     const ws = wb.addWorksheet('أصناف العميل', { views: [{ rightToLeft: true }] });
 
     const INK = 'FF3A2417', SAND = 'FFEDE5D8', SAND_DARK = 'FFDCCFBB', BAND = 'FFFAF7F2';
-    const totalCols = monthly ? (3 + monthly.groups.length * 4 + 1) : 7;
+    // نفس منطق اختيار الأعمدة الظاهرة (كمية/سعر/قيمة/عدد مرات شراء) اللي مختارها اليوزر في دروب داون
+    // الشاشة - بيتطبق هنا بالظبط عشان يفضل التصدير متطابق مع اللي شايفه على الشاشة.
+    const XLSX_COL_DEFS = [
+      { key: 'qty', label: 'الكمية', get: (cell) => cell ? cell.qty : null, numFmt: '#,##0', width: 12 },
+      { key: 'price', label: 'سعر القطعة (آخر توريد)', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : null, numFmt: '#,##0.00', width: 16 },
+      { key: 'value', label: 'القيمة', get: (cell) => cell ? cell.value : null, numFmt: '#,##0', width: 14 },
+      { key: 'count', label: 'عدد مرات الشراء', get: (cell) => cell ? cell.count : null, numFmt: '#,##0', width: 12 }
+    ];
+    const activeCols = (lk.monthlyCols && lk.monthlyCols.length) ? lk.monthlyCols : CUST_LOOKUP_ALL_COLS;
+    const activeDefs = XLSX_COL_DEFS.filter(d => activeCols.includes(d.key));
+    const nSub = activeDefs.length || 1;
+    const totalCols = monthly ? (3 + monthly.groups.length * nSub + 1) : 7;
     const colLetter = (n) => { let s = ''; while (n > 0) { const rem = (n - 1) % 26; s = String.fromCharCode(65 + rem) + s; n = Math.floor((n - 1) / 26); } return s; };
 
     try {
@@ -2873,8 +2907,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     ws.addRow([]);
 
     if (monthly) {
-      // جدول موزّع على أعمدة: مجموعة 4 أعمدة (كمية/سعر/قيمة/عدد مرات شراء) لكل شهر موجود في البيانات،
-      // بلون مختلف لكل شهر (نفس ألوان العرض على الشاشة)، مع عمود إجمالي القيمة في الآخر.
+      // جدول موزّع على أعمدة: مجموعة أعمدة (الأعمدة المختارة بس من كمية/سعر/قيمة/عدد مرات شراء) لكل
+      // شهر موجود في البيانات، بلون مختلف لكل شهر (نفس ألوان العرض على الشاشة)، مع عمود إجمالي القيمة.
       const headerRow1 = ws.addRow([]);
       const headerRow2 = ws.addRow([]);
       headerRow1.getCell(1).value = 'كود الصنف';
@@ -2889,18 +2923,17 @@ table.datatable details summary:hover { text-decoration: underline; }
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       });
       monthly.groups.forEach((g, idx) => {
-        const startCol = 4 + idx * 4;
+        const startCol = 4 + idx * nSub;
         const c = CUST_LOOKUP_MONTH_COLORS_XLSX[idx % CUST_LOOKUP_MONTH_COLORS_XLSX.length];
-        ws.mergeCells(headerRow1.number, startCol, headerRow1.number, startCol + 3);
+        ws.mergeCells(headerRow1.number, startCol, headerRow1.number, startCol + nSub - 1);
         const groupCell = headerRow1.getCell(startCol);
         groupCell.value = MONTH_NAMES_AR[g.month - 1] + ' ' + g.year;
         groupCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.head } };
         groupCell.font = { bold: true, color: { argb: c.headText } };
         groupCell.alignment = { horizontal: 'center', vertical: 'middle' };
-        const subLabels = ['الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'];
-        subLabels.forEach((lbl, j) => {
+        activeDefs.forEach((d, j) => {
           const cell = headerRow2.getCell(startCol + j);
-          cell.value = lbl;
+          cell.value = d.label;
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.cellBg } };
           cell.font = { bold: true, color: { argb: INK } };
           cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -2917,21 +2950,13 @@ table.datatable details summary:hover { text-decoration: underline; }
         row.getCell(3).value = resolveItemCategory(item) || '-';
         let rowTotal = 0;
         monthly.groups.forEach((g, gIdx) => {
-          const startCol = 4 + gIdx * 4;
+          const startCol = 4 + gIdx * nSub;
           const cell = byGroup.get(g.key);
-          const qty = cell ? cell.qty : 0;
-          const price = cell && cell.lastPrice ? cell.lastPrice.price : null;
-          const value = cell ? cell.value : 0;
-          const count = cell ? cell.count : 0;
-          rowTotal += value;
-          row.getCell(startCol).value = qty || null;
-          row.getCell(startCol + 1).value = price;
-          row.getCell(startCol + 2).value = value || null;
-          row.getCell(startCol + 3).value = count || null;
-          row.getCell(startCol).numFmt = '#,##0';
-          row.getCell(startCol + 1).numFmt = '#,##0.00';
-          row.getCell(startCol + 2).numFmt = '#,##0';
-          row.getCell(startCol + 3).numFmt = '#,##0';
+          rowTotal += cell ? cell.value : 0;
+          activeDefs.forEach((d, j) => {
+            row.getCell(startCol + j).value = d.get(cell);
+            row.getCell(startCol + j).numFmt = d.numFmt;
+          });
         });
         row.getCell(totalCols).value = rowTotal;
         row.getCell(totalCols).numFmt = '#,##0';
@@ -2947,14 +2972,17 @@ table.datatable details summary:hover { text-decoration: underline; }
       footerRow.getCell(2).value = 'الإجمالي';
       ws.mergeCells(footerRow.number, 2, footerRow.number, 3);
       monthly.groups.forEach((g, idx) => {
-        const startCol = 4 + idx * 4;
+        const startCol = 4 + idx * nSub;
         const gt = monthly.groupTotals.get(g.key) || { qty: 0, value: 0, count: 0 };
-        footerRow.getCell(startCol).value = gt.qty;
-        footerRow.getCell(startCol + 2).value = gt.value;
-        footerRow.getCell(startCol + 3).value = gt.count;
-        footerRow.getCell(startCol).numFmt = '#,##0';
-        footerRow.getCell(startCol + 2).numFmt = '#,##0';
-        footerRow.getCell(startCol + 3).numFmt = '#,##0';
+        activeDefs.forEach((d, j) => {
+          let v = null;
+          if (d.key === 'qty') v = gt.qty;
+          else if (d.key === 'value') v = gt.value;
+          else if (d.key === 'count') v = gt.count;
+          const cell = footerRow.getCell(startCol + j);
+          cell.value = v;
+          if (v !== null) cell.numFmt = '#,##0';
+        });
       });
       footerRow.getCell(totalCols).value = monthly.grandTotal;
       footerRow.getCell(totalCols).numFmt = '#,##0';
@@ -2968,11 +2996,8 @@ table.datatable details summary:hover { text-decoration: underline; }
       ws.getColumn(2).width = 32;
       ws.getColumn(3).width = 18;
       monthly.groups.forEach((g, idx) => {
-        const startCol = 4 + idx * 4;
-        ws.getColumn(startCol).width = 12;
-        ws.getColumn(startCol + 1).width = 16;
-        ws.getColumn(startCol + 2).width = 14;
-        ws.getColumn(startCol + 3).width = 12;
+        const startCol = 4 + idx * nSub;
+        activeDefs.forEach((d, j) => { ws.getColumn(startCol + j).width = d.width; });
       });
       ws.getColumn(totalCols).width = 16;
     } else {
@@ -4607,14 +4632,29 @@ function renderItems() {
         if (!monthlyData.groups.length) {
           resultEl.innerHTML = branchFilterHtml + '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>';
         } else {
+          // دروب داون "الأعمدة الظاهرة" - بيتحكم في أي من (الكمية/سعر القطعة/القيمة/عدد مرات الشراء)
+          // يظهر جوه كل مجموعة شهر (نفس الاختيار بيتطبق تلقائيًا على تصدير PDF وExcel كمان).
+          const activeCols = (lk.monthlyCols && lk.monthlyCols.length) ? lk.monthlyCols : CUST_LOOKUP_ALL_COLS;
+          const colDefsAr = custLookupColDefs(CUST_REPORT_I18N.ar);
+          const colsLabel = activeCols.length === CUST_LOOKUP_ALL_COLS.length ? 'الكل' : (fmt(activeCols.length) + ' من ' + CUST_LOOKUP_ALL_COLS.length);
+          const colsFilterHtml = `
+            <div class="msfilter no-print" style="display:inline-block; margin-bottom:14px;">
+              <button type="button" class="ms-btn" id="custLookupColsBtn">📊 الأعمدة الظاهرة: ${colsLabel} ▾</button>
+              <div class="ms-panel" id="custLookupColsPanel">
+                ${colDefsAr.map(d => `<label class="ms-item"><input type="checkbox" class="cl-col-cb" value="${d.key}" ${activeCols.includes(d.key) ? 'checked' : ''}><span>${d.label}</span></label>`).join('')}
+              </div>
+            </div>
+          `;
           const monthlyHtml = buildCustLookupMonthlyTableHTML(monthlyData, {
             monthNames: MONTH_NAMES_AR,
             labels: CUST_REPORT_I18N.ar,
+            cols: activeCols,
             itemCodeFn: itemCodeCell,
             itemCategoryFn: itemCategoryCell
           });
           resultEl.innerHTML = branchFilterHtml + `
             <div class="hint" style="margin-bottom:8px;">${fmt(monthlyData.orderedItems.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}"${branchNote} موزّعين على ${fmt(monthlyData.groups.length)} شهر${activityNote}</div>
+            <div>${colsFilterHtml}</div>
             ${monthlyHtml}
           `;
         }
@@ -4656,6 +4696,19 @@ function renderItems() {
       branchClearBtn.addEventListener('click', () => {
         state.customerItemLookup.siteFilter = '';
         renderCustLookupResult();
+      });
+    }
+    wireMsToggle(resultEl);
+    const colsBtn = resultEl.querySelector('#custLookupColsBtn'), colsPanel = resultEl.querySelector('#custLookupColsPanel');
+    if (colsBtn && colsPanel) {
+      colsPanel.querySelectorAll('.cl-col-cb').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const checked = Array.from(colsPanel.querySelectorAll('.cl-col-cb:checked')).map(c => c.value);
+          if (!checked.length) { cb.checked = true; return; } // امنع تصفير كل الأعمدة (لازم عمود واحد ظاهر على الأقل)
+          state.customerItemLookup.monthlyCols = checked;
+          renderCustLookupResult();
+          const r = document.getElementById('custLookupColsPanel'); if (r) r.classList.add('open');
+        });
       });
     }
     resultEl.querySelectorAll('.item-code-save-btn').forEach(btn => {
