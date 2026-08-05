@@ -2285,12 +2285,12 @@ table.datatable details summary:hover { text-decoration: underline; }
   // بالتة ألوان دورية لتمييز كل شهر بلون مختلف في جدول "أصناف عميل معين خلال فترة معينة" (شاشة/PDF)
   // وفي تصدير Excel (نسخة ARGB مقابلة). لو عدد الشهور المختارة أكتر من عدد الألوان، بتتكرر بالدور.
   const CUST_LOOKUP_MONTH_COLORS = [
-    { head: '#3A2417', headText: '#EDE5D8', cellBg: '#FAF7F2' },
-    { head: '#4A5D2E', headText: '#EAF3DE', cellBg: '#F5F9EE' },
-    { head: '#7A3B23', headText: '#FAECE7', cellBg: '#FDF4F1' },
-    { head: '#3C3489', headText: '#EEEDFE', cellBg: '#F7F6FD' },
-    { head: '#185FA5', headText: '#E6F1FB', cellBg: '#F2F8FD' },
-    { head: '#993556', headText: '#FBEAF0', cellBg: '#FDF3F6' }
+    { head: '#3A2417', headText: '#EDE5D8', cellBg: '#FAF7F2', subText: '#3A2417' },
+    { head: '#4A5D2E', headText: '#EAF3DE', cellBg: '#F5F9EE', subText: '#27500A' },
+    { head: '#7A3B23', headText: '#FAECE7', cellBg: '#FDF4F1', subText: '#712B13' },
+    { head: '#3C3489', headText: '#EEEDFE', cellBg: '#F7F6FD', subText: '#26215C' },
+    { head: '#185FA5', headText: '#E6F1FB', cellBg: '#F2F8FD', subText: '#042C53' },
+    { head: '#993556', headText: '#FBEAF0', cellBg: '#FDF3F6', subText: '#4B1528' }
   ];
   const CUST_LOOKUP_MONTH_COLORS_XLSX = [
     { head: 'FF3A2417', headText: 'FFEDE5D8', cellBg: 'FFFAF7F2' },
@@ -2308,7 +2308,12 @@ table.datatable details summary:hover { text-decoration: underline; }
   function computeCustLookupMonthlyGroups(rows) {
     const groupKeySet = new Set();
     rows.forEach(r => { if (r.year && r.monthNum) groupKeySet.add(r.year + '-' + String(r.monthNum).padStart(2, '0')); });
-    const groups = Array.from(groupKeySet).sort().map(k => {
+    const groups = Array.from(groupKeySet).sort((a, b) => {
+      const [ay, am] = a.split('-').map(Number);
+      const [by, bm] = b.split('-').map(Number);
+      if (am !== bm) return am - bm;
+      return ay - by;
+    }).map(k => {
       const [y, m] = k.split('-').map(Number);
       return { key: k, year: y, month: m };
     });
@@ -2418,7 +2423,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     let headRow2 = '';
     groups.forEach((g, idx) => {
       const c = colorAt(idx);
-      activeDefs.forEach(d => { headRow2 += `<th style="background:${c.cellBg};">${d.label}</th>`; });
+      activeDefs.forEach(d => { headRow2 += `<th style="background:${c.cellBg};color:${c.subText};font-weight:700;">${d.label}</th>`; });
     });
 
     let bodyRows = '';
