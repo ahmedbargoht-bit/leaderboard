@@ -1556,6 +1556,104 @@ table.datatable details summary:hover { text-decoration: underline; }
     }
   }
 
+  // ---------------- حذف عميل نهائيًا (بكل تاريخه من كل الجداول) ----------------
+  // بيلم كل الأسماء (variants) اللي بترجع لنفس العميل بعد التطبيع (SalesParser.normalizeCustomerKey) من
+  // كل مصادر البيانات المحلية المحمّلة من السحابة - عشان لو نفس العميل اتكتب بفوارق كتابة بسيطة بين
+  // ملف الفواتير وملفات كشوف الحساب/الخصم غير المباشر يتلم برضه، زي باقي أماكن المطابقة في الأداة.
+  function computeCustomerDeleteVariants(customerName) {
+    const normKey = SalesParser.normalizeCustomerKey(customerName);
+    if (!normKey) return null;
+    const variants = { invoices: new Set(), items: new Set(), returns: new Set(), checks: new Set(), ledger: new Set(), indirect: new Set() };
+    state.invoices.forEach(i => { if (SalesParser.normalizeCustomerKey(i['العميل']) === normKey) variants.invoices.add(i['العميل']); });
+    state.itemRows.forEach(r => { if (SalesParser.normalizeCustomerKey(r.customer) === normKey) variants.items.add(r.customer); });
+    state.returns.forEach(r => { if (SalesParser.normalizeCustomerKey(r['العميل']) === normKey) variants.returns.add(r['العميل']); });
+    state.collectedChecks.forEach(c => { if (SalesParser.normalizeCustomerKey(c.customer) === normKey) variants.checks.add(c.customer); });
+    state.accountLedger.forEach(l => { if (SalesParser.normalizeCustomerKey(l.customer) === normKey) variants.ledger.add(l.customer); });
+    state.indirectDiscounts.forEach(d => { if (SalesParser.normalizeCustomerKey(d['العميل']) === normKey) variants.indirect.add(d['العميل']); });
+    // صفوف الربط اليدوي لخصم غير مباشر بترتبط بعميل الفواتير عن طريق matched_customer - نحدد مفاتيحها
+    // (discount_customer) اللي بترجع للعميل ده، سواء عن طريق اسم الخصم نفسه أو الاسم المطابَق يدويًا
+    const linkKeys = new Set();
+    state.manualIndirectLinks.forEach((matchedCust, discCust) => {
+      if (variants.indirect.has(discCust) || SalesParser.normalizeCustomerKey(matchedCust) === normKey) linkKeys.add(discCust);
+    });
+    return { normKey, variants, linkKeys };
+  }
+
+  // بيرجع ملخص (عدد/قيمة) كل حاجة مرتبطة بالعميل ده في كل جدول - يتعرض للمستخدم كمعاينة قبل الحذف النهائي
+  function computeCustomerDeletePreview(customerName) {
+    const res = computeCustomerDeleteVariants(customerName);
+    if (!res) return null;
+    const { normKey, variants, linkKeys } = res;
+    const invMatches = state.invoices.filter(i => variants.invoices.has(i['العميل']));
+    const itemMatches = state.itemRows.filter(r => variants.items.has(r.customer));
+    const retMatches = state.returns.filter(r => variants.returns.has(r['العميل']));
+    const checkMatches = state.collectedChecks.filter(c => variants.checks.has(c.customer));
+    const ledgerMatches = state.accountLedger.filter(l => variants.ledger.has(l.customer));
+    const indirectMatches = state.indirectDiscounts.filter(d => variants.indirect.has(d['العميل']));
+    const years = new Set();
+    invMatches.forEach(i => { if (i.__year) years.add(i.__year); });
+    const totalCount = invMatches.length + itemMatches.length + retMatches.length + checkMatches.length + ledgerMatches.length + indirectMatches.length + linkKeys.size;
+    return {
+      normKey, variants, linkKeys,
+      nameVariants: Array.from(new Set([].concat(Array.from(variants.invoices), Array.from(variants.items), Array.from(variants.returns), Array.from(variants.checks), Array.from(variants.ledger), Array.from(variants.indirect)))),
+      invoices: { count: invMatches.length, net: invMatches.reduce((s, i) => s + i.__net, 0) },
+      items: { count: itemMatches.length },
+      returns: { count: retMatches.length, value: retMatches.reduce((s, r) => s + (r['الإجمالي'] || 0), 0) },
+      checks: { count: checkMatches.length, amount: checkMatches.reduce((s, c) => s + (c.amount || 0), 0) },
+      ledger: { count: ledgerMatches.length, debit: ledgerMatches.reduce((s, l) => s + (l.debit || 0), 0), credit: ledgerMatches.reduce((s, l) => s + (l.credit || 0), 0) },
+      indirect: { count: indirectMatches.length, amount: indirectMatches.reduce((s, d) => s + (d['المبلغ'] || 0), 0) },
+      years: Array.from(years).sort((a, b) => a - b),
+      totalCount
+    };
+  }
+
+  // حذف نهائي وكامل لكل بيانات عميل معين من كل جداول tamr_sales_* في السحابة (فواتير/أصناف/مرتجعات/
+  // شيكات محصلة/قيود حساب/خصم غير مباشر وربطه اليدوي). بياخد نسخة احتياطية كاملة (JSON) في جدول
+  // tamr_sales_deleted_customer_backups قبل الحذف مباشرة كطبقة أمان، لأن الحذف ده نهائي ومفيش تراجع فيه.
+  async function deleteCustomerCompletely(customerName) {
+    if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان تقدر تحذف.', 'err'); return false; }
+    const preview = computeCustomerDeletePreview(customerName);
+    if (!preview || !preview.totalCount) { logStatus(`مفيش أي بيانات مسجلة لعميل بالاسم "${customerName}".`, 'err'); return false; }
+    const { normKey, variants, linkKeys } = preview;
+    try {
+      logStatus(`جاري عمل نسخة احتياطية من بيانات "${customerName}" قبل الحذف...`);
+      const payload = {
+        invoices: state.invoices.filter(i => variants.invoices.has(i['العميل'])),
+        items: state.itemRows.filter(r => variants.items.has(r.customer)),
+        returns: state.returns.filter(r => variants.returns.has(r['العميل'])),
+        checks: state.collectedChecks.filter(c => variants.checks.has(c.customer)),
+        ledger: state.accountLedger.filter(l => variants.ledger.has(l.customer)),
+        indirectDiscounts: state.indirectDiscounts.filter(d => variants.indirect.has(d['العميل'])),
+        indirectLinks: Array.from(linkKeys).map(k => ({ discount_customer: k, matched_customer: state.manualIndirectLinks.get(k) }))
+      };
+      const { error: backupErr } = await sb.from('tamr_sales_deleted_customer_backups').insert(
+        [{ customer_name: customerName, norm_key: normKey, payload }]
+      );
+      if (backupErr) throw backupErr;
+
+      logStatus('جاري حذف كل بيانات العميل من كل الجداول...');
+      const delTasks = [];
+      if (variants.invoices.size) delTasks.push(sb.from('tamr_sales_invoices').delete().in('customer', Array.from(variants.invoices)));
+      if (variants.items.size) delTasks.push(sb.from('tamr_sales_items').delete().in('customer', Array.from(variants.items)));
+      if (variants.returns.size) delTasks.push(sb.from('tamr_sales_returns').delete().in('customer', Array.from(variants.returns)));
+      if (variants.checks.size) delTasks.push(sb.from('tamr_sales_collected_checks').delete().in('customer', Array.from(variants.checks)));
+      if (variants.ledger.size) delTasks.push(sb.from('tamr_sales_account_ledger').delete().in('customer', Array.from(variants.ledger)));
+      if (variants.indirect.size) delTasks.push(sb.from('tamr_sales_indirect_discounts').delete().in('customer', Array.from(variants.indirect)));
+      if (linkKeys.size) delTasks.push(sb.from('tamr_sales_indirect_links').delete().in('discount_customer', Array.from(linkKeys)));
+
+      const results = await Promise.all(delTasks);
+      const failed = results.find(r => r && r.error);
+      if (failed) throw failed.error;
+
+      logStatus(`تم حذف عميل "${customerName}" نهائيًا بكل تاريخه من النظام ✓ (اتعملت نسخة احتياطية قبل الحذف في حالة احتياج الاسترجاع)`, 'ok');
+      await loadFromCloud();
+      return true;
+    } catch (e) {
+      logStatus('تعذر حذف العميل: ' + (e.message || e), 'err');
+      return false;
+    }
+  }
+
   async function syncToCloud(newInvoices, newItemRows, newReturns, newIndirectDiscounts, newChecks, newLedger) {
     if (!sb || (!newInvoices.length && !newItemRows.length && !(newReturns && newReturns.length) && !(newIndirectDiscounts && newIndirectDiscounts.length) && !(newChecks && newChecks.length) && !(newLedger && newLedger.length))) return;
     try {
@@ -5370,6 +5468,25 @@ function renderRepRoutes() {
     </tr></thead><tbody>${unmatchedRowsHtml}</tbody></table></div>
   ` : '';
 
+  // حذف عميل نهائيًا - قائمة بحث بكل أسماء عملاء الفواتير الحالية عشان يسهل الاختيار
+  const delCustNames = Array.from(new Set(state.invoices.map(i => i['العميل']).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const delCustDatalistHtml = delCustNames.map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+  const deleteCustomerBoxHtml = `
+    <div class="card" style="margin:24px 0 0; padding:16px 18px; box-shadow:none; border:1.5px solid var(--bad);">
+      <div class="table-title" style="margin:0 0 8px; color:var(--bad);">⚠ حذف عميل نهائيًا من النظام</div>
+      <div class="hint" style="margin:0 0 10px;">بيمسح كل فواتير وأصناف ومرتجعات وشيكات محصلة وقيود حساب وخصومات غير مباشرة لعميل معين نهائيًا من كل الجداول في السحابة - إجراء لا رجوع فيه (بتتعمل نسخة احتياطية تلقائيًا قبل الحذف).</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div>
+          <div class="hint" style="margin:0 0 4px;">اسم العميل</div>
+          <input type="text" id="delCustInput" list="delCustDatalist" placeholder="اكتب أو اختار اسم العميل..." style="width:260px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <datalist id="delCustDatalist">${delCustDatalistHtml}</datalist>
+        </div>
+        <button type="button" id="delCustPreviewBtn" class="btn secondary" style="padding:9px 18px;">عرض بيانات العميل</button>
+      </div>
+      <div id="delCustPreviewArea" style="margin-top:14px;"></div>
+    </div>
+  `;
+
   el.innerHTML = `
     <div class="table-title">أداء المبيعات حسب المجموعة</div>
     <div class="grid2">
@@ -5405,6 +5522,7 @@ function renderRepRoutes() {
 
     ${addBranchBoxHtml}
     ${unmatchedLinkSectionHtml}
+    ${deleteCustomerBoxHtml}
   `;
 
   makeChart('chRepRouteGroups', barConfig(byGroup.slice(0, 12).map(x => x.key), byGroup.slice(0, 12).map(x => x.sum), 'صافي المبيعات', true));
@@ -5450,6 +5568,53 @@ function renderRepRoutes() {
       if (!route) { alert('اكتب اسم خط السير الأول.'); return; }
       rrAddBranchBtn.disabled = true; rrAddBranchBtn.textContent = 'جاري الحفظ...';
       await addRepRouteBranch(name, route, group);
+    });
+  }
+
+  const delCustPreviewBtn = el.querySelector('#delCustPreviewBtn');
+  if (delCustPreviewBtn) {
+    delCustPreviewBtn.addEventListener('click', () => {
+      const input = el.querySelector('#delCustInput');
+      const name = input.value.trim();
+      const areaEl = el.querySelector('#delCustPreviewArea');
+      if (!name) { alert('اكتب اسم العميل الأول.'); return; }
+      const preview = computeCustomerDeletePreview(name);
+      if (!preview || !preview.totalCount) {
+        areaEl.innerHTML = `<div class="hint" style="color:var(--bad);">مفيش أي بيانات مسجلة لعميل بالاسم ده.</div>`;
+        return;
+      }
+      const rows = [
+        ['الفواتير', fmt(preview.invoices.count), fmtMoney(preview.invoices.net)],
+        ['أصناف الفواتير', fmt(preview.items.count), '-'],
+        ['المرتجعات', fmt(preview.returns.count), fmtMoney(preview.returns.value)],
+        ['الشيكات المحصلة', fmt(preview.checks.count), fmtMoney(preview.checks.amount)],
+        ['قيود كشف الحساب', fmt(preview.ledger.count), fmtMoney(preview.ledger.debit) + ' مدين / ' + fmtMoney(preview.ledger.credit) + ' دائن'],
+        ['قيود الخصم غير المباشر', fmt(preview.indirect.count), fmtMoney(preview.indirect.amount)]
+      ];
+      const yearsText = preview.years.length ? preview.years.join('، ') : '-';
+      const variantsText = preview.nameVariants.length > 1
+        ? `<div class="hint" style="margin:6px 0;">الأسماء المطابقة اللي هتتحذف: ${preview.nameVariants.map(escapeHtml).join('، ')}</div>` : '';
+      areaEl.innerHTML = `
+        <div class="hint" style="margin:0 0 6px;">السنوات: ${escapeHtml(String(yearsText))}</div>
+        ${variantsText}
+        <div class="table-wrap">${tableHTML(['المصدر', 'العدد', 'القيمة'], rows, null)}</div>
+        <div class="hint" style="margin:12px 0 6px; color:var(--bad); font-weight:600;">الحذف ده نهائي ومفيش رجوع فيه (هتتعمل نسخة احتياطية تلقائيًا قبل الحذف). اكتب اسم العميل "${escapeHtml(name)}" تاني بالظبط عشان تفعّل زرار الحذف.</div>
+        <input type="text" id="delCustConfirmInput" placeholder="اكتب اسم العميل تاني للتأكيد..." style="width:260px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--bad); margin-inline-end:10px;">
+        <button type="button" id="delCustConfirmBtn" class="btn" style="padding:9px 18px; background:var(--bad); border-color:var(--bad);" disabled>حذف العميل نهائيًا</button>
+      `;
+      const confirmInput = areaEl.querySelector('#delCustConfirmInput');
+      const confirmBtn = areaEl.querySelector('#delCustConfirmBtn');
+      confirmInput.addEventListener('input', () => {
+        confirmBtn.disabled = confirmInput.value.trim() !== name;
+      });
+      confirmBtn.addEventListener('click', async () => {
+        if (confirmBtn.disabled) return;
+        if (!confirm(`متأكد إنك عايز تحذف عميل "${name}" نهائيًا بكل تاريخه؟ الإجراء ده لا رجوع فيه.`)) return;
+        confirmBtn.disabled = true; confirmBtn.textContent = 'جاري الحذف...';
+        const ok = await deleteCustomerCompletely(name);
+        if (!ok) { confirmBtn.disabled = false; confirmBtn.textContent = 'حذف العميل نهائيًا'; }
+        // لو الحذف نجح، deleteCustomerCompletely بتنادي loadFromCloud() اللي بتعمل renderAll() لوحدها
+      });
     });
   }
 
