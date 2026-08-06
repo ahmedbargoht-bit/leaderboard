@@ -981,7 +981,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
-    customerItemLookup: { customer: '', site: '', siteFilter: '', activity: '', years: [], months: [], lang: 'ar', monthlyCols: ['qty', 'price', 'value', 'count', 'growth'] },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، siteFilter = فرع مختار من ضمن فروع العميل المختار (pills)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان. monthlyCols = الأعمدة الظاهرة (كمية/سعر/قيمة/عدد مرات شراء/نسبة النمو) جوه كل مجموعة شهر في العرض الموزّع بالشهور
+    customerItemLookup: { customer: '', site: '', siteFilter: '', activity: '', years: [], months: [], lang: 'ar', monthlyCols: ['qty', 'priceCarton', 'price', 'value', 'count', 'growth'] },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. site = فرع عميل مختار (يستبعد customer والعكس)، siteFilter = فرع مختار من ضمن فروع العميل المختار (pills)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان. monthlyCols = الأعمدة الظاهرة (كمية/سعر/قيمة/عدد مرات شراء/نسبة النمو) جوه كل مجموعة شهر في العرض الموزّع بالشهور
     allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
     repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
     repRoutesFilter: { group: '', route: '', search: '' },  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
@@ -2375,7 +2375,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     rows.forEach(r => {
       if (!r.date) return;
       const cur = byItem.get(r.item);
-      if (!cur || r.date > cur.date) byItem.set(r.item, { date: r.date, price: r.pricePiece || 0 });
+      if (!cur || r.date > cur.date) byItem.set(r.item, { date: r.date, price: r.pricePiece || 0, priceCarton: r.priceCarton || 0 });
     });
     return byItem;
   }
@@ -2427,7 +2427,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       g.qty += (r.qtyCarton || 0) + (r.qtyPiece || 0);
       g.value += r.total || 0;
       g.count += 1;
-      if (r.date && (!g.lastPrice || r.date > g.lastPrice.date)) g.lastPrice = { date: r.date, price: r.pricePiece || 0 };
+      if (r.date && (!g.lastPrice || r.date > g.lastPrice.date)) g.lastPrice = { date: r.date, price: r.pricePiece || 0, priceCarton: r.priceCarton || 0 };
     });
 
     const itemTotals = Array.from(perItem.entries()).map(([item, byGroup]) => {
@@ -2486,11 +2486,12 @@ table.datatable details summary:hover { text-decoration: underline; }
   // الثابت دايمًا (بغض النظر عن ترتيب اختيار اليوزر ليها من دروب داون "الأعمدة الظاهرة"). ctx بتتبعت
   // لـget() الخاص بعمود "نسبة النمو" بس، وفيها {byGroup, groups, idx} اللازمين لإيجاد نفس الشهر في
   // أقرب سنة أقدم.
-  const CUST_LOOKUP_ALL_COLS = ['qty', 'price', 'value', 'count', 'growth'];
+  const CUST_LOOKUP_ALL_COLS = ['qty', 'priceCarton', 'price', 'value', 'count', 'growth'];
   function custLookupColDefs(t) {
     return [
       { key: 'qty', label: t.qty, kind: 'num', get: (cell) => cell ? cell.qty : 0 },
-      { key: 'price', label: t.pieceUnitPrice, kind: 'money', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : 0 },
+      { key: 'priceCarton', label: t.cartonUnitPrice, kind: 'unitprice', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.priceCarton : 0 },
+      { key: 'price', label: t.pieceUnitPrice, kind: 'unitprice', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : 0 },
       { key: 'value', label: t.value, kind: 'money', get: (cell) => cell ? cell.value : 0 },
       { key: 'count', label: t.purchaseCount, kind: 'num', get: (cell) => cell ? cell.count : 0 },
       { key: 'growth', label: t.growth, kind: 'pct', get: (cell, ctx) => custLookupGrowthPct(ctx.byGroup, ctx.groups, ctx.idx) }
@@ -2539,6 +2540,7 @@ table.datatable details summary:hover { text-decoration: underline; }
           const v = d.get(cell, ctx);
           let disp;
           if (d.kind === 'pct') disp = (v === null || v === undefined) ? '-' : fmtGrowthPct(v);
+          else if (d.kind === 'unitprice') disp = v ? fmt(v, 2) : '-'; // سعر الوحدة (كرتونة/قطعة) بكسور الجنيه لو موجودة
           else disp = v ? (d.kind === 'money' ? fmtMoney(v) : fmt(v)) : '-';
           cells += `<td${bg}>${disp}</td>`;
         });
@@ -2847,7 +2849,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'كل الفترة المتاحة', allYears: 'كل السنوات', allMonths: 'كل الشهور',
       branchCount: 'عدد الفروع', itemCount: 'عدد الأصناف الموردة',
       itemCode: 'كود الصنف', item: 'الصنف', category: 'التصنيف', qty: 'الكمية', value: 'القيمة',
-      pieceUnitPrice: 'سعر القطعة (آخر توريد)', purchaseCount: 'عدد مرات الشراء', growth: 'نسبة النمو % (نفس الشهر)',
+      cartonUnitPrice: 'سعر الكرتونة/العبوة (آخر توريد)', pieceUnitPrice: 'سعر القطعة (آخر توريد)', purchaseCount: 'عدد مرات الشراء', growth: 'نسبة النمو % (نفس الشهر)',
       pctOfTotal: 'نسبة من إجمالي مبيعات العميل', total: 'الإجمالي',
       sigSales: 'مدير مبيعات مودرن تريد', sigGM: 'مدير عام المبيعات', sigLine: 'الاسم / التوقيع / التاريخ',
       months: ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
@@ -2857,7 +2859,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'All available period', allYears: 'All years', allMonths: 'All months',
       branchCount: 'Number of Branches', itemCount: 'Number of Items Supplied',
       itemCode: 'Item Code', item: 'Item', category: 'Category', qty: 'Quantity', value: 'Value',
-      pieceUnitPrice: 'Unit Price (Last Delivery)', purchaseCount: 'Purchase Count', growth: 'Growth % (Same Month YoY)',
+      cartonUnitPrice: 'Carton/Pack Price (Last Delivery)', pieceUnitPrice: 'Unit Price (Last Delivery)', purchaseCount: 'Purchase Count', growth: 'Growth % (Same Month YoY)',
       pctOfTotal: '% of Customer Total Sales', total: 'Total',
       sigSales: 'Modern Trade Sales Manager', sigGM: 'General Sales Manager', sigLine: 'Name / Signature / Date',
       months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -2867,7 +2869,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Toute la période disponible', allYears: 'Toutes les années', allMonths: 'Tous les mois',
       branchCount: 'Nombre de succursales', itemCount: "Nombre d'articles fournis",
       itemCode: "Code d'article", item: 'Article', category: 'Catégorie', qty: 'Quantité', value: 'Valeur',
-      pieceUnitPrice: 'Prix unitaire (dernière livraison)', purchaseCount: "Nombre d'achats", growth: 'Croissance % (même mois, annuel)',
+      cartonUnitPrice: 'Prix carton/colis (dernière livraison)', pieceUnitPrice: 'Prix unitaire (dernière livraison)', purchaseCount: "Nombre d'achats", growth: 'Croissance % (même mois, annuel)',
       pctOfTotal: '% du total des ventes du client', total: 'Total',
       sigSales: 'Directeur des ventes Modern Trade', sigGM: 'Directeur général des ventes', sigLine: 'Nom / Signature / Date',
       months: ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
@@ -2877,7 +2879,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allPeriod: 'Gesamter verfügbarer Zeitraum', allYears: 'Alle Jahre', allMonths: 'Alle Monate',
       branchCount: 'Anzahl der Filialen', itemCount: 'Anzahl der gelieferten Artikel',
       itemCode: 'Artikelcode', item: 'Artikel', category: 'Kategorie', qty: 'Menge', value: 'Wert',
-      pieceUnitPrice: 'Stückpreis (letzte Lieferung)', purchaseCount: 'Anzahl der Käufe', growth: 'Wachstum % (gleicher Monat, Jahresvergleich)',
+      cartonUnitPrice: 'Kartonpreis (letzte Lieferung)', pieceUnitPrice: 'Stückpreis (letzte Lieferung)', purchaseCount: 'Anzahl der Käufe', growth: 'Wachstum % (gleicher Monat, Jahresvergleich)',
       pctOfTotal: '% des Gesamtumsatzes des Kunden', total: 'Gesamt',
       sigSales: 'Verkaufsleiter Modern Trade', sigGM: 'Generalverkaufsleiter', sigLine: 'Name / Unterschrift / Datum',
       months: ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember']
@@ -2934,13 +2936,13 @@ table.datatable details summary:hover { text-decoration: underline; }
       const totalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
       const totalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
       itemCount = byItemCust.length;
-      const headers = [t.itemCode, t.item, t.category, t.qty, t.pieceUnitPrice, t.value, t.pctOfTotal];
+      const headers = [t.itemCode, t.item, t.category, t.qty, t.cartonUnitPrice, t.pieceUnitPrice, t.value, t.pctOfTotal];
       const rows = byItemCust.map(x => {
         const pct = totalSum ? x.sum / totalSum : 0;
         const lp = lastPriceOf.get(x.key);
-        return [resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmtPct(pct)];
+        return [resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', fmt(custQtyOf.get(x.key) || 0), lp ? fmt(lp.priceCarton, 2) : '-', lp ? fmt(lp.price, 2) : '-', fmtMoney(x.sum), fmtPct(pct)];
       });
-      const footer = ['-', t.total, '-', fmt(totalQty), '-', fmtMoney(totalSum), fmtPct(1)];
+      const footer = ['-', t.total, '-', fmt(totalQty), '-', '-', fmtMoney(totalSum), fmtPct(1)];
       tableBodyHtml = `<div class="table-wrap">${tableHTML(headers, rows, footer)}</div>`;
     }
 
@@ -3015,6 +3017,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     // الشاشة - بيتطبق هنا بالظبط عشان يفضل التصدير متطابق مع اللي شايفه على الشاشة.
     const XLSX_COL_DEFS = [
       { key: 'qty', label: 'الكمية', get: (cell) => cell ? cell.qty : null, numFmt: '#,##0', width: 12 },
+      { key: 'priceCarton', label: 'سعر الكرتونة/العبوة (آخر توريد)', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.priceCarton : null, numFmt: '#,##0.00', width: 18 },
       { key: 'price', label: 'سعر القطعة (آخر توريد)', get: (cell) => (cell && cell.lastPrice) ? cell.lastPrice.price : null, numFmt: '#,##0.00', width: 16 },
       { key: 'value', label: 'القيمة', get: (cell) => cell ? cell.value : null, numFmt: '#,##0', width: 14 },
       { key: 'count', label: 'عدد مرات الشراء', get: (cell) => cell ? cell.count : null, numFmt: '#,##0', width: 12 },
@@ -3023,7 +3026,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const activeCols = (lk.monthlyCols && lk.monthlyCols.length) ? lk.monthlyCols : CUST_LOOKUP_ALL_COLS;
     const activeDefs = XLSX_COL_DEFS.filter(d => activeCols.includes(d.key));
     const nSub = activeDefs.length || 1;
-    const totalCols = monthly ? (3 + monthly.groups.length * nSub + 1) : 7;
+    const totalCols = monthly ? (3 + monthly.groups.length * nSub + 1) : 8;
     const colLetter = (n) => { let s = ''; while (n > 0) { const rem = (n - 1) % 26; s = String.fromCharCode(65 + rem) + s; n = Math.floor((n - 1) / 26); } return s; };
 
     try {
@@ -3148,7 +3151,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       });
       ws.getColumn(totalCols).width = 16;
     } else {
-      const headers = ['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'نسبة من الإجمالي'];
+      const headers = ['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر الكرتونة/العبوة (آخر توريد)', 'سعر القطعة (آخر توريد)', 'القيمة', 'نسبة من الإجمالي'];
       const headerRow = ws.addRow(headers);
       headerRow.eachCell(cell => {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
@@ -3161,34 +3164,36 @@ table.datatable details summary:hover { text-decoration: underline; }
       byItemCust.forEach((x, idx) => {
         const pct = totalSum ? x.sum / totalSum : 0;
         const lp = lastPriceOf.get(x.key);
-        const row = ws.addRow([resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', custQtyOf.get(x.key) || 0, lp ? lp.price : null, x.sum, pct]);
+        const row = ws.addRow([resolveItemCode(x.key) || '-', x.key, resolveItemCategory(x.key) || '-', custQtyOf.get(x.key) || 0, lp ? lp.priceCarton : null, lp ? lp.price : null, x.sum, pct]);
         if (idx % 2 === 1) {
           row.eachCell(cell => { if (!cell.fill || !cell.fill.fgColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }; });
         }
         row.getCell(4).numFmt = '#,##0';
         row.getCell(5).numFmt = '#,##0.00';
-        row.getCell(6).numFmt = '#,##0';
-        row.getCell(7).numFmt = '0.0%';
+        row.getCell(6).numFmt = '#,##0.00';
+        row.getCell(7).numFmt = '#,##0';
+        row.getCell(8).numFmt = '0.0%';
         row.getCell(2).alignment = { horizontal: 'right' };
       });
 
-      const footerRow = ws.addRow(['-', 'الإجمالي', '-', totalQty, null, totalSum, 1]);
+      const footerRow = ws.addRow(['-', 'الإجمالي', '-', totalQty, null, null, totalSum, 1]);
       footerRow.eachCell(cell => {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SAND_DARK } };
         cell.font = { bold: true, color: { argb: INK } };
         cell.border = { top: { style: 'medium', color: { argb: INK } } };
       });
       footerRow.getCell(4).numFmt = '#,##0';
-      footerRow.getCell(6).numFmt = '#,##0';
-      footerRow.getCell(7).numFmt = '0.0%';
+      footerRow.getCell(7).numFmt = '#,##0';
+      footerRow.getCell(8).numFmt = '0.0%';
 
       ws.getColumn(1).width = 14;
       ws.getColumn(2).width = 42;
       ws.getColumn(3).width = 20;
       ws.getColumn(4).width = 14;
-      ws.getColumn(5).width = 20;
-      ws.getColumn(6).width = 16;
+      ws.getColumn(5).width = 22;
+      ws.getColumn(6).width = 20;
       ws.getColumn(7).width = 16;
+      ws.getColumn(8).width = 16;
     }
 
     ws.addRow([]); ws.addRow([]);
@@ -4812,15 +4817,15 @@ function renderItems() {
         const lastPriceOf = lastPiecePriceMap(lkRows);
         const lkTableRows = byItemCust.map(x => {
           const lp = lastPriceOf.get(x.key);
-          return [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), lp ? fmtMoney(lp.price) : '-', fmtMoney(x.sum), fmt(x.count)];
+          return [itemCodeCell(x.key), x.key, itemCategoryCell(x.key), fmt(custQtyOf.get(x.key) || 0), lp ? fmt(lp.priceCarton, 2) : '-', lp ? fmt(lp.price, 2) : '-', fmtMoney(x.sum), fmt(x.count)];
         });
         const lkTotalQty = Array.from(custQtyOf.values()).reduce((s, v) => s + v, 0);
         const lkTotalSum = byItemCust.reduce((s, x) => s + x.sum, 0);
         const lkTotalCount = byItemCust.reduce((s, x) => s + x.count, 0);
-        const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), '-', fmtMoney(lkTotalSum), fmt(lkTotalCount)];
+        const lkFooter = ['-', 'الإجمالي', '-', fmt(lkTotalQty), '-', '-', fmtMoney(lkTotalSum), fmt(lkTotalCount)];
         resultEl.innerHTML = branchFilterHtml + `
           <div class="hint" style="margin-bottom:8px;">${fmt(byItemCust.length)} صنف اشتراهم ${targetLabel} "${escapeHtml(targetName)}"${branchNote} في الفترة دي${activityNote}</div>
-          <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
+          <div class="table-wrap">${tableHTML(['كود الصنف', 'الصنف', 'التصنيف', 'الكمية', 'سعر الكرتونة/العبوة (آخر توريد)', 'سعر القطعة (آخر توريد)', 'القيمة', 'عدد مرات الشراء'], lkTableRows, lkFooter)}</div>
         `;
       }
     }
