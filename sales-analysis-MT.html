@@ -375,6 +375,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     <div class="tabbar no-print">
       <button class="tabbtn active" data-tab="panel-overview" data-label="نظرة عامة">نظرة عامة</button>
       <button class="tabbtn" data-tab="panel-items" data-label="الأصناف">الأصناف</button>
+      <button class="tabbtn" data-tab="panel-itemmerge" data-label="دمج الأصناف">دمج الأصناف</button>
       <button class="tabbtn" data-tab="panel-branches" data-label="الفروع">الفروع</button>
       <button class="tabbtn" data-tab="panel-customers" data-label="العملاء">العملاء</button>
       <button class="tabbtn" data-tab="panel-reps" data-label="المناديب وخطوط السير">المناديب وخطوط السير</button>
@@ -397,6 +398,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     <div class="card">
       <div class="tabpanel active" id="panel-overview"></div>
       <div class="tabpanel" id="panel-items"></div>
+      <div class="tabpanel" id="panel-itemmerge"></div>
       <div class="tabpanel" id="panel-branches"></div>
       <div class="tabpanel" id="panel-customers"></div>
       <div class="tabpanel" id="panel-reps"></div>
@@ -990,7 +992,9 @@ table.datatable details summary:hover { text-decoration: underline; }
     accountLedger: [],  // حركة مدين/دائن كاملة لكل عميل من نفس الملفات - مصدر "المستحق" و"أعمار الديون" (تُحسب دايمًا وقت العرض، مش مخزنة كأرصدة جاهزة)
     collectedChecksFilter: { branch: [], customer: '', years: [], months: [] },  // فلاتر تاب الشيكات المحصلة
     debtAgingFilter: { branch: [], search: '', asOfDate: '', invoiceMonth: '' },  // فلاتر تاب أعمار الديون - asOfDate فاضي = آخر تاريخ متاح في البيانات
-    dueCollectionsFilter: { year: null, month: null }  // تاب "التحصيلات المستحقة خلال الشهر" - year/month فاضيين = الشهر الحالي الفعلي (تاريخ اليوم)
+    dueCollectionsFilter: { year: null, month: null },  // تاب "التحصيلات المستحقة خلال الشهر" - year/month فاضيين = الشهر الحالي الفعلي (تاريخ اليوم)
+    itemAliases: new Map(),  // اسم الصنف القديم (منظم) -> الاسم الموحد الجديد بعد الدمج - تاب "دمج الأصناف" (tamr_sales_item_merges)
+    itemMergeSelection: []  // الأصناف المختارة حاليًا للدمج في تاب "دمج الأصناف" (مصفوفة أسماء أصناف - بيانات واجهة مؤقتة، مش محفوظة بالسحابة)
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -1419,6 +1423,58 @@ table.datatable details summary:hover { text-decoration: underline; }
     }
   }
 
+  // ---------------- دمج الأصناف (اسم موحد جديد لأصناف اتكتبت بمسميات مختلفة) ----------------
+  // بيرجع الاسم "الفعلي" اللي المفروض يتعرض بيه الصنف ده في كل الشاشات - لو الاسم ده (بعد التطبيع)
+  // موجود في خريطة الدمج (state.itemAliases) بيرجع الاسم الموحد الجديد، وإلا بيرجع الاسم زي ما هو.
+  function resolveItemAliasName(name) {
+    if (!name) return name;
+    const hit = state.itemAliases.get(normItemName(name));
+    return hit || name;
+  }
+  // بتطبق خريطة الدمج الحالية على كل بيانات الأصناف المحمّلة فعلًا في الذاكرة (أصناف الفواتير
+  // والمرتجعات) - بتتنادى بعد أي تحميل من السحابة أو رفع ملفات جديدة، عشان أي صنف اندمج قبل كده
+  // يفضل يظهر باسمه الموحد في كل التابات (الأصناف، أصناف عميل معين، أعمار الديون...) تلقائيًا.
+  function applyItemAliasesToState() {
+    if (!state.itemAliases.size) return;
+    state.itemRows.forEach(r => { if (r.item) r.item = resolveItemAliasName(r.item); });
+    state.returns.forEach(r => { if (r['الصنف']) r['الصنف'] = resolveItemAliasName(r['الصنف']); });
+  }
+  // دمج صنفين أو أكتر تحت اسم موحد جديد: بيحفظ خريطة الدمج (اسم قديم -> اسم جديد) لكل الأسماء
+  // المختارة في tamr_sales_item_merges، وبيحفظ كود/تصنيف الصنف الجديد في الكتالوج (لو مبعوتين)،
+  // وبعدين بيطبّق الدمج فورًا على البيانات المحمّلة حاليًا من غير ما يحتاج يعمل reload كامل من السحابة.
+  async function mergeItemsIntoNewName(oldNamesRaw, canonicalNameRaw, code, category) {
+    if (!sb) { logStatus('محتاج تكون مسجل دخول بالسحابة عشان يتحفظ الدمج ده.', 'err'); return false; }
+    const canonicalName = normItemName(canonicalNameRaw);
+    if (!canonicalName) { logStatus('لازم تكتب الاسم الموحد الجديد للصنف.', 'err'); return false; }
+    const oldNames = Array.from(new Set((oldNamesRaw || []).map(normItemName).filter(Boolean)));
+    if (oldNames.length < 2) { logStatus('لازم تختار صنفين على الأقل عشان تدمجهم.', 'err'); return false; }
+    try {
+      const aliasRows = oldNames
+        .filter(n => n !== canonicalName) // مفيش داعي نعمل alias لاسم لنفسه
+        .map(n => ({ old_name: n, canonical_name: canonicalName, updated_at: new Date().toISOString() }));
+      if (aliasRows.length) {
+        const { error } = await sb.from('tamr_sales_item_merges').upsert(aliasRows, { onConflict: 'old_name' });
+        if (error) throw error;
+        aliasRows.forEach(r => state.itemAliases.set(r.old_name, r.canonical_name));
+      }
+      if (code || category) {
+        const { error: catErr } = await sb.from('tamr_sales_item_catalog').upsert(
+          [{ item_name: canonicalName, item_code: code || null, category: category || null, updated_at: new Date().toISOString() }],
+          { onConflict: 'item_name' }
+        );
+        if (catErr) throw catErr;
+        state.itemCatalog.set(canonicalName, { code: code || null, category: category || null, name: canonicalName });
+      }
+      applyItemAliasesToState();
+      logStatus(`تم دمج ${fmt(oldNames.length)} صنف تحت اسم "${canonicalName}" ✓`, 'ok');
+      renderAll();
+      return true;
+    } catch (e) {
+      logStatus('تعذر دمج الأصناف: ' + (e.message || e), 'err');
+      return false;
+    }
+  }
+
   function resolveManualRoute(site) {
     if (!site) return null;
     const m = state.manualRoutes.get(site);
@@ -1805,8 +1861,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     if (!client) return;
     try {
       logStatus('جاري تحميل البيانات المحفوظة من قبل من السحابة...');
-      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows, repRouteRows, repRouteSiteLinkRows, checkRows, ledgerRows] = await Promise.all([
-        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog'), fetchAllRows(client, 'tamr_sales_rep_routes'), fetchAllRows(client, 'tamr_sales_rep_route_site_links'), fetchAllRows(client, 'tamr_sales_collected_checks'), fetchAllRows(client, 'tamr_sales_account_ledger')
+      const [invRows, itemRows, returnRows, manualRouteRows, routeCatalogRows, indirectRows, indirectLinkRows, itemCatalogRows, repRouteRows, repRouteSiteLinkRows, checkRows, ledgerRows, itemMergeRows] = await Promise.all([
+        fetchAllRows(client, 'tamr_sales_invoices'), fetchAllRows(client, 'tamr_sales_items'), fetchAllRows(client, 'tamr_sales_returns'), fetchAllRows(client, 'tamr_sales_manual_routes'), fetchAllRows(client, 'tamr_sales_route_catalog'), fetchAllRows(client, 'tamr_sales_indirect_discounts'), fetchAllRows(client, 'tamr_sales_indirect_links'), fetchAllRows(client, 'tamr_sales_item_catalog'), fetchAllRows(client, 'tamr_sales_rep_routes'), fetchAllRows(client, 'tamr_sales_rep_route_site_links'), fetchAllRows(client, 'tamr_sales_collected_checks'), fetchAllRows(client, 'tamr_sales_account_ledger'), fetchAllRows(client, 'tamr_sales_item_merges')
       ]);
       if (sb !== client) return; // اتعمل تسجيل خروج أثناء التحميل - متجاهلين النتيجة القديمة
       state.manualRoutes = new Map(manualRouteRows.map(r => [r.customer_site, { route: r.route, region: r.region, sector: r.sector }]));
@@ -1819,6 +1875,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       state.collectedChecks = checkRows.map(dbRowToCheck);
       state.accountLedger = ledgerRows.map(dbRowToLedger);
       state.manualIndirectLinks = new Map(indirectLinkRows.map(r => [r.discount_customer, r.matched_customer]));
+      state.itemAliases = new Map(itemMergeRows.map(r => [normItemName(r.old_name), r.canonical_name]));
       if (!invRows.length) {
         logStatus('لا توجد بيانات محفوظة سابقًا في السحابة - ارفع الملفات عشان تبدأ.');
         return;
@@ -1834,6 +1891,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       state.invoices = keptInvRows.map(dbRowToInvoice);
       state.itemRows = itemRows.filter(row => !excludedInvKeys.has((row.file_name || '') + '||' + (row.branch || '') + '||' + (row.invoice_no || ''))).map(dbRowToItemRow);
       reapplyManualRoutesToState();
+      applyItemAliasesToState();
       rebuildInvoiceCustomerIndex();
       logStatus(`تم تحميل ${state.invoices.length} فاتورة و${state.returns.length} سطر مرتجع و${state.indirectDiscounts.length} قيد خصم غير مباشر و${state.collectedChecks.length} شيك محصل محفوظين من قبل من السحابة ✓`, 'ok');
       populateFilters();
@@ -2075,6 +2133,8 @@ table.datatable details summary:hover { text-decoration: underline; }
         logStatus('خطأ في قراءة ملف المرتجعات: ' + e.message, 'err');
       }
     }
+    // لو فيه دمج أصناف محفوظ من قبل، نطبّقه على أي أسطر أصناف/مرتجعات جديدة لسه واصلة في الرفعة دي
+    applyItemAliasesToState();
 
     let newIndirectDiscounts = [];
     if (indirectFiles.length) {
@@ -4378,6 +4438,7 @@ table.datatable details summary:hover { text-decoration: underline; }
   function renderAll() {
     renderOverview();
     renderItems();
+    renderItemMerge();
     renderBranches();
     renderCustomers();
     renderReps();
@@ -5647,6 +5708,130 @@ function renderRepRoutes() {
     f.search = searchInput.value;
     refreshDirTable();
   });
+}
+
+/* ---------------- دمج الأصناف ---------------- */
+// بتخلّي اليوزر يدمج صنفين أو أكتر (سواء ليهم كود أو لأ) تحت اسم موحد جديد يختاره - عشان لو نفس
+// الصنف اتكتب بأكتر من اسم بين ملفات مختلفة (فوارق كتابة، تعديل مسمى...) يتوحد في كل شاشات الأداة
+// (الأصناف، أصناف عميل معين، أعمار الديون...إلخ) من غير ما يلمس بيانات الفواتير الأصلية المرفوعة.
+function renderItemMerge() {
+  const el = document.getElementById('panel-itemmerge');
+  if (!el) return;
+  const sel = state.itemMergeSelection;
+
+  const allItems = groupSum(state.itemRows, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
+  if (!allItems.length) { el.innerHTML = emptyState('لا توجد بيانات أصناف بعد'); return; }
+  const itemInfo = new Map(allItems.map(x => [x.key, x]));
+  const searchDatalistHtml = allItems.map(x => `<option value="${escapeHtml(x.key)}"></option>`).join('');
+
+  const selRowsHtml = sel.map(name => {
+    const info = itemInfo.get(name);
+    const code = resolveItemCode(name) || '-';
+    const cat = resolveItemCategory(name) || '-';
+    return `<tr data-item="${escapeHtml(name)}">
+      <td>${escapeHtml(name)}</td>
+      <td>${escapeHtml(code)}</td>
+      <td>${escapeHtml(cat)}</td>
+      <td>${info ? fmtMoney(info.sum) : '-'}</td>
+      <td><button type="button" class="btn secondary im-remove-btn" style="padding:4px 10px; font-size:11.5px;">✕ إزالة</button></td>
+    </tr>`;
+  }).join('');
+
+  const knownCodes = Array.from(new Set(sel.map(n => resolveItemCode(n)).filter(Boolean)));
+  const codeDatalistHtml = knownCodes.map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+  const allKnownCats = Array.from(new Set(Array.from(state.itemCatalog.values()).map(v => v.category).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const catDatalistHtml = allKnownCats.map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+
+  const mergeFormHtml = sel.length >= 2 ? `
+    <div class="card" style="margin:16px 0 0; padding:16px 18px; box-shadow:none; border:1.5px solid var(--sand-dark);">
+      <div class="table-title" style="margin:0 0 10px;">دمج ${fmt(sel.length)} صنف تحت اسم موحد جديد</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div>
+          <div class="hint" style="margin:0 0 4px;">الاسم الموحد الجديد</div>
+          <input type="text" id="imNewNameInput" placeholder="اكتب الاسم الجديد للصنف الموحد..." style="width:280px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+        </div>
+        <div>
+          <div class="hint" style="margin:0 0 4px;">كود الصنف (اختياري)</div>
+          <input type="text" id="imCodeInput" list="imCodeDatalist" placeholder="كود الصنف" style="width:140px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <datalist id="imCodeDatalist">${codeDatalistHtml}</datalist>
+        </div>
+        <div>
+          <div class="hint" style="margin:0 0 4px;">التصنيف (اختياري)</div>
+          <input type="text" id="imCatInput" list="imCatDatalist" placeholder="التصنيف" style="width:180px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+          <datalist id="imCatDatalist">${catDatalistHtml}</datalist>
+        </div>
+        <button type="button" id="imMergeBtn" class="btn" style="padding:9px 18px;">دمج الأصناف دي</button>
+      </div>
+      <div class="hint" style="margin-top:10px;">بعد الدمج، كل الشاشات (الأصناف، أصناف عميل معين، أعمار الديون...إلخ) هتعرض الأصناف دي كصنف واحد بالاسم الجديد، وكل الكميات والقيم هتتجمع مع بعض. الفواتير الأصلية المرفوعة نفسها مش بتتغير.</div>
+    </div>
+  ` : `<div class="pill-note" style="margin-top:14px;">اختار صنفين على الأقل من القايمة تحت عشان تقدر تدمجهم.</div>`;
+
+  const byCanonical = new Map();
+  state.itemAliases.forEach((canonical, oldName) => {
+    if (!byCanonical.has(canonical)) byCanonical.set(canonical, []);
+    byCanonical.get(canonical).push(oldName);
+  });
+  const existingMergesHtml = byCanonical.size ? `
+    <div class="table-title" style="margin-top:24px;">الدمجات الحالية (${fmt(byCanonical.size)})</div>
+    <div class="table-wrap">${tableHTML(['الاسم الموحد الجديد', 'الأسماء القديمة المدموجة'],
+      Array.from(byCanonical.entries()).sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'ar')).map(([canonical, olds]) => [escapeHtml(canonical), escapeHtml(olds.join('، '))]), null)}</div>
+  ` : '';
+
+  el.innerHTML = `
+    <div class="hint" style="margin-bottom:12px;">دور على الأصناف اللي عايز تدمجها (سواء ليها كود أو لأ) وضيفها للقايمة تحت، وبعدين اكتب اسم موحد جديد وكود/تصنيف واضغط دمج. كل الأصناف بتتحدث فورًا في كل تابات الأداة.</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px;">
+      <div>
+        <div class="hint" style="margin:0 0 4px;">دور عن صنف بالاسم</div>
+        <input type="text" id="imSearchInput" list="imSearchDatalist" placeholder="اكتب اسم الصنف..." style="width:320px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
+        <datalist id="imSearchDatalist">${searchDatalistHtml}</datalist>
+      </div>
+      <button type="button" id="imAddBtn" class="btn secondary" style="padding:9px 18px;">+ إضافة للدمج</button>
+    </div>
+    ${sel.length ? `<div class="table-wrap"><table class="datatable"><thead><tr>
+      <th>اسم الصنف</th><th>الكود الحالي</th><th>التصنيف الحالي</th><th>إجمالي القيمة</th><th></th>
+    </tr></thead><tbody>${selRowsHtml}</tbody></table></div>` : ''}
+    ${mergeFormHtml}
+    ${existingMergesHtml}
+  `;
+
+  const addBtn = el.querySelector('#imAddBtn');
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      const input = el.querySelector('#imSearchInput');
+      const val = input.value.trim();
+      if (!val) { alert('اكتب اسم الصنف الأول.'); return; }
+      const match = allItems.find(x => x.key === val);
+      if (!match) { alert('لازم تختار اسم صنف موجود بالظبط من القايمة.'); return; }
+      if (state.itemMergeSelection.includes(val)) { input.value = ''; return; }
+      state.itemMergeSelection.push(val);
+      renderItemMerge();
+    });
+  }
+  el.querySelectorAll('.im-remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tr = btn.closest('tr');
+      const name = tr.dataset.item;
+      state.itemMergeSelection = state.itemMergeSelection.filter(n => n !== name);
+      renderItemMerge();
+    });
+  });
+  const mergeBtn = el.querySelector('#imMergeBtn');
+  if (mergeBtn) {
+    mergeBtn.addEventListener('click', async () => {
+      const newName = el.querySelector('#imNewNameInput').value.trim();
+      const code = el.querySelector('#imCodeInput').value.trim();
+      const cat = el.querySelector('#imCatInput').value.trim();
+      if (!newName) { alert('اكتب الاسم الموحد الجديد الأول.'); return; }
+      mergeBtn.disabled = true; mergeBtn.textContent = 'جاري الدمج...';
+      const ok = await mergeItemsIntoNewName(state.itemMergeSelection.slice(), newName, code, cat);
+      if (ok) {
+        state.itemMergeSelection = [];
+        renderItemMerge();
+      } else {
+        mergeBtn.disabled = false; mergeBtn.textContent = 'دمج الأصناف دي';
+      }
+    });
+  }
 }
 
 /* ---------------- الأرباع ---------------- */
