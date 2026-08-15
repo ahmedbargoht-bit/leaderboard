@@ -994,7 +994,8 @@ table.datatable details summary:hover { text-decoration: underline; }
     debtAgingFilter: { branch: [], search: '', asOfDate: '', invoiceMonth: '' },  // فلاتر تاب أعمار الديون - asOfDate فاضي = آخر تاريخ متاح في البيانات
     dueCollectionsFilter: { year: null, month: null },  // تاب "التحصيلات المستحقة خلال الشهر" - year/month فاضيين = الشهر الحالي الفعلي (تاريخ اليوم)
     itemAliases: new Map(),  // اسم الصنف القديم (منظم) -> الاسم الموحد الجديد بعد الدمج - تاب "دمج الأصناف" (tamr_sales_item_merges)
-    itemMergeSelection: []  // الأصناف المختارة حاليًا للدمج في تاب "دمج الأصناف" (مصفوفة أسماء أصناف - بيانات واجهة مؤقتة، مش محفوظة بالسحابة)
+    itemMergeSelection: [],  // الأصناف المختارة حاليًا للدمج في تاب "دمج الأصناف" (مصفوفة أسماء أصناف - بيانات واجهة مؤقتة، مش محفوظة بالسحابة)
+    customerSearchFilter: ''  // مربع بحث بالاسم في جدول "كل العملاء" (تاب العملاء) - بيضيّق الجدول لعميل/عملاء معينين
   };
 
   const FILTER_LABELS = { activity: 'النشاط', branch: 'الفرع', year: 'السنة', month: 'الشهر', rep: 'المندوب', item: 'الصنف' };
@@ -5095,9 +5096,13 @@ function renderCustomers() {
 
   const byCustomer = groupSum(inv, i => i['العميل'], i => i.__net);
   byCustomer.sort((a, b) => b.sum - a.sum);
-  const top = byCustomer; // كل العملاء بالكامل، مرتبين تنازليًا حسب صافي المبيعات
+  // مربع البحث بالاسم بيضيّق قائمة العملاء المعروضة (والإجمالي أسفل الجدول بيتحدث معاها)
+  const custSearchTerm = (state.customerSearchFilter || '').trim();
+  const top = custSearchTerm ? byCustomer.filter(x => String(x.key).includes(custSearchTerm)) : byCustomer;
   const years = activeYears(inv, i => i.__year);
   const custBmap = yearBreakdownMap(inv, i => i['العميل'], i => i.__year, i => i.__net);
+  // بيانات أصناف الفواتير (بنفس فلاتر الصفحة العلوية) - مصدر عمود "عدد الأصناف" القابل للفتح لكل عميل
+  const custItemRowsAll = filteredItemRows();
 
   const returnRows = filteredReturns();
   const hasReturns = returnRows.length > 0;
@@ -5116,8 +5121,8 @@ function renderCustomers() {
   const showPostReturnGrowth = hasReturns && retYearsShown.length >= 2;
 
   // custGroups: نفس ترتيب/طول custHeaders بالظبط - يستخدم للتحكم في إخفاء/إظهار مجموعات أعمدة من دروب داون "أعمدة الجدول"
-  const custGroups = ['customer', 'branches', 'gross', 'discount', 'discountPct', 'tax'];
-  const custHeaders = ['العميل', 'عدد الفروع', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة'];
+  const custGroups = ['customer', 'branches', 'items', 'gross', 'discount', 'discountPct', 'tax'];
+  const custHeaders = ['العميل', 'عدد الفروع', 'عدد الأصناف', 'إجمالي قبل الخصم', 'خصم مباشر', 'نسبة الخصم المباشر', 'الضريبة'];
   if (years.length >= 2) {
     const yh = yearColumnHeaders(years);
     custHeaders.push(...yh); custGroups.push(...yh.map(() => 'net'));
@@ -5165,9 +5170,39 @@ function renderCustomers() {
         </div>
       </details>`;
     }
+
+    // تفاصيل الأصناف اللي اشتراهم العميل ده: عدد الأصناف قابل للفتح، جوّاه كل صنف بالكمية والقيمة
+    // لكل سنة + الفرق ونسبة النمو (بنفس أعمدة المقارنة السنوية المستخدمة في الجدول الرئيسي)
+    const itemRowsX = custItemRowsAll.filter(r => r.customer === x.key);
+    const byItemX = groupSum(itemRowsX, r => r.item, r => r.total).sort((a, b) => b.sum - a.sum);
+    let itemsCell = '-';
+    if (byItemX.length) {
+      const itemQtyMap = new Map();
+      itemRowsX.forEach(r => { itemQtyMap.set(r.item, (itemQtyMap.get(r.item) || 0) + (r.qtyCarton || 0) + (r.qtyPiece || 0)); });
+      const itemYearBmap = years.length >= 2 ? yearBreakdownMap(itemRowsX, r => r.item, r => r.year, r => r.total) : null;
+      const itemValueHeaders = years.length >= 2 ? yearColumnHeaders(years, '') : ['القيمة'];
+      const itemDetailRows = byItemX.map(it => {
+        const qty = itemQtyMap.get(it.key) || 0;
+        const valueCells = years.length >= 2
+          ? yearColumnCells(itemYearBmap, it.key, years, fmtMoney)
+          : [fmtMoney(it.sum)];
+        const cells = [escapeHtml(it.key), fmt(qty), ...valueCells];
+        return '<tr>' + cells.map((c, ci) => `<td style="padding:3px 5px; ${ci === 0 ? 'text-align:right;' : ''} border-bottom:1px solid var(--sand);">${c}</td>`).join('') + '</tr>';
+      }).join('');
+      const itemHeadCells = ['الصنف', 'الكمية', ...itemValueHeaders].map(h => `<th style="padding:3px 5px; text-align:right; font-weight:700;">${h}</th>`).join('');
+      itemsCell = `<details><summary style="cursor:pointer; font-weight:700; color:var(--caramel-dark);">${fmt(byItemX.length)} 📦</summary>
+        <div style="margin-top:6px; min-width:320px; max-height:280px; overflow:auto;">
+          <table style="width:100%; border-collapse:collapse; font-size:11px;">
+            <thead><tr style="background:var(--sand);">${itemHeadCells}</tr></thead>
+            <tbody>${itemDetailRows}</tbody>
+          </table>
+        </div>
+      </details>`;
+    }
+
     const base = years.length >= 2
-      ? [x.key, branchesCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)]
-      : [x.key, branchesCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
+      ? [x.key, branchesCell, itemsCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), ...yearColumnCells(custBmap, x.key, years, fmtMoney)]
+      : [x.key, branchesCell, itemsCell, fmtMoney(grossX), fmtMoney(discX), fmtPct(discPctX), fmtMoney(taxX), `<b>${fmtMoney(x.sum)}</b>`];
     if (hasReturns) {
       const normKey = SalesParser.normalizeCustomerKey(x.key);
       const retYm = retYearBmap.get(normKey) || new Map();
@@ -5202,9 +5237,10 @@ function renderCustomers() {
   const topNet = top.reduce((s, x) => s + x.sum, 0);
   const topDiscPct = topGross ? topDisc / topGross : 0;
   const topSitesCount = new Set(topInvs.map(i => i['فرع_العميل']).filter(Boolean)).size;
+  const topItemsCount = new Set(custItemRowsAll.filter(r => topKeys.includes(r.customer)).map(r => r.item)).size;
   const custFooterBase = years.length >= 2
-    ? ['الإجمالي (كل العملاء)', fmt(topSitesCount), fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), ...yearColumnCells(sumYearTotalsBmap(custBmap, topKeys, years), '__TOTAL__', years, fmtMoney)]
-    : ['الإجمالي (كل العملاء)', fmt(topSitesCount), fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), `<b>${fmtMoney(topNet)}</b>`];
+    ? ['الإجمالي (كل العملاء)', fmt(topSitesCount), fmt(topItemsCount), fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), ...yearColumnCells(sumYearTotalsBmap(custBmap, topKeys, years), '__TOTAL__', years, fmtMoney)]
+    : ['الإجمالي (كل العملاء)', fmt(topSitesCount), fmt(topItemsCount), fmtMoney(topGross), fmtMoney(topDisc), fmtPct(topDiscPct), fmtMoney(topTax), `<b>${fmtMoney(topNet)}</b>`];
   let custFooter = custFooterBase;
   if (hasReturns) {
     const topNormKeys = topKeys.map(k => SalesParser.normalizeCustomerKey(k));
@@ -5240,7 +5276,7 @@ function renderCustomers() {
 
   // دروب داون "أعمدة الجدول" - تحكم في إظهار/إخفاء مجموعات أعمدة (عمود العميل ثابت دايمًا)
   const custColLabels = {
-    branches: 'عدد الفروع', gross: 'إجمالي قبل الخصم', discount: 'خصم مباشر',
+    branches: 'عدد الفروع', items: 'عدد الأصناف', gross: 'إجمالي قبل الخصم', discount: 'خصم مباشر',
     discountPct: 'نسبة الخصم المباشر', tax: 'الضريبة',
     net: years.length >= 2 ? 'الصافي (حسب السنة + الفرق والنمو)' : 'الصافي بعد الخصم المباشر والضريبة',
     returns: 'المرتجعات', growth: 'نسبة النمو بعد المرتجع'
@@ -5263,6 +5299,14 @@ function renderCustomers() {
   const visibleRows = rowsHtml.map(r => r.filter((_, i) => keepCol(i)));
   const visibleFooter = custFooter.filter((_, i) => keepCol(i));
 
+  const custSearchHtml = `
+    <div class="no-print" style="margin-bottom:10px;">
+      <input type="text" id="custSearchInput" placeholder="دور عن عميل بالاسم..." value="${escapeHtml(custSearchTerm)}"
+        style="width:280px; font-family:inherit; padding:7px 10px; border-radius:8px; border:1.5px solid var(--sand-dark); font-size:12.5px;">
+      ${custSearchTerm ? `<button type="button" id="custSearchClearBtn" class="btn secondary" style="padding:6px 12px; font-size:11.5px; margin-inline-start:6px;">✕ مسح البحث</button>` : ''}
+    </div>
+  `;
+
   el.innerHTML = `
     <div class="grid2">
       <div class="chart-box"><canvas id="chTopCustomers"></canvas></div>
@@ -5270,11 +5314,30 @@ function renderCustomers() {
     </div>
     <div class="table-title">كل العملاء (${fmt(top.length)} عميل) - مع الخصم المباشر والصافي بعد الخصم المباشر والضريبة${hasReturns ? ' والمرتجعات' : ''}</div>
     ${returnsNote}
+    ${custSearchHtml}
     ${colToggleHtml}
     <div class="table-wrap">${tableHTML(visibleHeaders, visibleRows, visibleFooter)}</div>
   `;
   makeChart('chTopCustomers', barConfig(top.slice(0, 10).map(x => x.key), top.slice(0, 10).map(x => x.sum), 'صافي المبيعات', true));
   makeChart('chCashCredit', pieConfig(byCash.map(x => x.key), byCash.map(x => x.sum)));
+
+  const custSearchInput = el.querySelector('#custSearchInput');
+  if (custSearchInput) {
+    custSearchInput.addEventListener('input', () => {
+      state.customerSearchFilter = custSearchInput.value;
+      renderCustomers();
+    });
+    // نرجّع التركيز لمربع البحث بعد كل إعادة رسم عشان يقدر يكمل كتابة من غير ما ياخد كليك تاني
+    custSearchInput.focus();
+    custSearchInput.setSelectionRange(custSearchInput.value.length, custSearchInput.value.length);
+  }
+  const custSearchClearBtn = el.querySelector('#custSearchClearBtn');
+  if (custSearchClearBtn) {
+    custSearchClearBtn.addEventListener('click', () => {
+      state.customerSearchFilter = '';
+      renderCustomers();
+    });
+  }
 
   const colBtn = el.querySelector('#custColBtn');
   const colPanel = el.querySelector('#custColPanel');
