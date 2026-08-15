@@ -5104,8 +5104,9 @@ function renderCustomers() {
   // بيانات أصناف الفواتير (بنفس فلاتر الصفحة العلوية) - مصدر عمود "عدد الأصناف" القابل للفتح لكل عميل
   const custItemRowsAll = filteredItemRows();
 
-  // أعلى 15 صنف نموًا في الكمية - بتظهر لما البحث يضيّق الجدول لعميل واحد بالظبط (العميل "المختار" من الداشبورد فوق)
-  // النمو بيتحسب بمقارنة كمية آخر سنتين موجودتين في الفلتر الحالي (كرتونة + قطعة)، وترتيب تنازلي حسب حجم الزيادة
+  // كل الأصناف اللي العميل اشتغل فيها (مش بس أعلى 15) مع مقارنة الكمية - بتظهر لما البحث يضيّق الجدول لعميل واحد بالظبط
+  // (العميل "المختار" من الداشبورد فوق). المقارنة بكمية آخر سنتين موجودتين في الفلتر الحالي (كرتونة + قطعة)،
+  // مرتبة تنازليًا حسب حجم النمو (الأصناف اللي زادت فوق، اللي قلت تحت) عشان الصورة تبقى كاملة مش مقتصرة على النمو بس.
   let topGrowthItemsHtml = '';
   if (top.length === 1) {
     const selCust = top[0].key;
@@ -5124,23 +5125,25 @@ function renderCustomers() {
         const prevQ = ym.get(prevY) || 0;
         const lastQ = ym.get(lastY) || 0;
         const diff = lastQ - prevQ;
-        if (diff > 0) growthList.push({ item, prevQ, lastQ, diff });
+        growthList.push({ item, prevQ, lastQ, diff }); // كل صنف اشتغل فيه العميل، سواء زاد أو قل أو ثبت
       });
       growthList.sort((a, b) => b.diff - a.diff);
-      const top15Growth = growthList.slice(0, 15);
-      if (top15Growth.length) {
-        const growthRows = top15Growth.map(g => {
+      if (growthList.length) {
+        const growthRows = growthList.map(g => {
           const pctCell = growthCellHTML(g.prevQ, g.lastQ);
-          return `<tr><td style="text-align:right;">${escapeHtml(g.item)}</td><td>${fmt(g.prevQ)}</td><td>${fmt(g.lastQ)}</td><td><span style="color:var(--good); font-weight:700;">+${fmt(g.diff)}</span></td><td>${pctCell}</td></tr>`;
+          const diffCell = g.diff === 0
+            ? fmt(0)
+            : `<span style="color:${g.diff > 0 ? 'var(--good)' : 'var(--bad)'}; font-weight:700;">${g.diff > 0 ? '+' : ''}${fmt(g.diff)}</span>`;
+          return `<tr><td style="text-align:right;">${escapeHtml(g.item)}</td><td>${fmt(g.prevQ)}</td><td>${fmt(g.lastQ)}</td><td>${diffCell}</td><td>${pctCell}</td></tr>`;
         }).join('');
         topGrowthItemsHtml = `
-          <div class="table-title">🚀 أعلى ${fmt(top15Growth.length)} صنف نموًا في الكمية - ${escapeHtml(selCust)} (${prevY} ← ${lastY})</div>
+          <div class="table-title">🚀 كل الأصناف حسب نمو الكمية (${fmt(growthList.length)} صنف) - ${escapeHtml(selCust)} (${prevY} ← ${lastY})</div>
           <div class="table-wrap"><table class="datatable">
             <thead><tr><th style="text-align:right;">الصنف</th><th>كمية ${prevY}</th><th>كمية ${lastY}</th><th>الفرق</th><th>نسبة النمو</th></tr></thead>
             <tbody>${growthRows}</tbody>
           </table></div>`;
       } else {
-        topGrowthItemsHtml = `<div class="pill-note">مفيش أصناف حصل فيها نمو في الكمية لعميل "${escapeHtml(selCust)}" بين ${prevY} و${lastY} في الفلتر الحالي.</div>`;
+        topGrowthItemsHtml = `<div class="pill-note">مفيش بيانات أصناف كفاية للمقارنة لعميل "${escapeHtml(selCust)}" بين ${prevY} و${lastY} في الفلتر الحالي.</div>`;
       }
     } else {
       topGrowthItemsHtml = `<div class="pill-note">محتاج بيانات سنتين على الأقل في الفلتر فوق (السنة) عشان نحسب نمو الكميات لعميل "${escapeHtml(selCust)}".</div>`;
