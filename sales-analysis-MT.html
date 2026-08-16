@@ -2911,7 +2911,7 @@ table.datatable details summary:hover { text-decoration: underline; }
   const CUST_REPORT_I18N = {
     ar: {
       reportTitle: 'تقرير أصناف العميل', customer: 'العميل', branchName: 'الفرع', activityLabel: 'النشاط', companyBranchLabel: 'فرع الشركة', period: 'الفترة',
-      allPeriod: 'كل الفترة المتاحة', allYears: 'كل السنوات', allMonths: 'كل الشهور',
+      allPeriod: 'كل الفترة المتاحة', allYears: 'كل السنوات', allMonths: 'كل الشهور', allCustomers: 'كل العملاء',
       branchCount: 'عدد الفروع', itemCount: 'عدد الأصناف الموردة',
       itemCode: 'كود الصنف', item: 'الصنف', category: 'التصنيف', qty: 'الكمية', value: 'القيمة',
       cartonUnitPrice: 'سعر الكرتونة/العبوة (آخر توريد)', pieceUnitPrice: 'سعر القطعة (آخر توريد)', purchaseCount: 'عدد مرات الشراء', growth: 'نسبة النمو % (نفس الشهر)',
@@ -2921,7 +2921,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     },
     en: {
       reportTitle: 'Customer Items Report', customer: 'Customer', branchName: 'Branch', activityLabel: 'Activity', companyBranchLabel: 'Company Branch', period: 'Period',
-      allPeriod: 'All available period', allYears: 'All years', allMonths: 'All months',
+      allPeriod: 'All available period', allYears: 'All years', allMonths: 'All months', allCustomers: 'All Customers',
       branchCount: 'Number of Branches', itemCount: 'Number of Items Supplied',
       itemCode: 'Item Code', item: 'Item', category: 'Category', qty: 'Quantity', value: 'Value',
       cartonUnitPrice: 'Carton/Pack Price (Last Delivery)', pieceUnitPrice: 'Unit Price (Last Delivery)', purchaseCount: 'Purchase Count', growth: 'Growth % (Same Month YoY)',
@@ -2931,7 +2931,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     },
     fr: {
       reportTitle: 'Rapport des articles du client', customer: 'Client', branchName: 'Succursale', activityLabel: 'Activité', companyBranchLabel: "Succursale de l'entreprise", period: 'Période',
-      allPeriod: 'Toute la période disponible', allYears: 'Toutes les années', allMonths: 'Tous les mois',
+      allPeriod: 'Toute la période disponible', allYears: 'Toutes les années', allMonths: 'Tous les mois', allCustomers: 'Tous les clients',
       branchCount: 'Nombre de succursales', itemCount: "Nombre d'articles fournis",
       itemCode: "Code d'article", item: 'Article', category: 'Catégorie', qty: 'Quantité', value: 'Valeur',
       cartonUnitPrice: 'Prix carton/colis (dernière livraison)', pieceUnitPrice: 'Prix unitaire (dernière livraison)', purchaseCount: "Nombre d'achats", growth: 'Croissance % (même mois, annuel)',
@@ -2941,7 +2941,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     },
     de: {
       reportTitle: 'Kundenartikelbericht', customer: 'Kunde', branchName: 'Filiale', activityLabel: 'Aktivität', companyBranchLabel: 'Unternehmensfiliale', period: 'Zeitraum',
-      allPeriod: 'Gesamter verfügbarer Zeitraum', allYears: 'Alle Jahre', allMonths: 'Alle Monate',
+      allPeriod: 'Gesamter verfügbarer Zeitraum', allYears: 'Alle Jahre', allMonths: 'Alle Monate', allCustomers: 'Alle Kunden',
       branchCount: 'Anzahl der Filialen', itemCount: 'Anzahl der gelieferten Artikel',
       itemCode: 'Artikelcode', item: 'Artikel', category: 'Kategorie', qty: 'Menge', value: 'Wert',
       cartonUnitPrice: 'Kartonpreis (letzte Lieferung)', pieceUnitPrice: 'Stückpreis (letzte Lieferung)', purchaseCount: 'Anzahl der Käufe', growth: 'Wachstum % (gleicher Monat, Jahresvergleich)',
@@ -2956,18 +2956,19 @@ table.datatable details summary:hover { text-decoration: underline; }
   // أسماء العملاء/الأصناف بتفضل زي ما هي دايمًا).
   window.printCustomerItemsReport = function () {
     const lk = state.customerItemLookup;
-    if (!lk.customers.length && !lk.site) { alert('اختار عميل أو فرع من القائمة الأول.'); return; }
     const lang = lk.lang || 'ar';
     const t = CUST_REPORT_I18N[lang] || CUST_REPORT_I18N.ar;
 
+    // lk.customers فاضية تعني "كل العملاء" (اختيار "الكل" صراحة) مش "مفيش اختيار" - فبنعرض بيانات
+    // كل العملاء مجمّعة مع باقي الفلاتر (فرع الشركة/النشاط/السنة/الشهر) لو مفيش فرع عميل محدد بالبحث.
     const baseRows = state.itemRows.filter(r =>
-      (lk.site ? r.site === lk.site : lk.customers.includes(r.customer)) &&
+      (lk.site ? r.site === lk.site : (!lk.customers.length || lk.customers.includes(r.customer))) &&
       (!lk.activity || r.activity === lk.activity) &&
       (!lk.branches.length || lk.branches.includes(r.branch)) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
-    const custSites = (!lk.site && lk.customers.length) ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))) : [];
+    const custSites = !lk.site ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))) : [];
     const lkRows = (custSites.length && lk.siteFilters.length) ? baseRows.filter(r => lk.siteFilters.includes(r.site)) : baseRows;
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
 
@@ -2980,7 +2981,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const periodLabel = (!lk.years.length && !lk.months.length) ? t.allPeriod : (yearsLabel + ' - ' + monthsLabel);
 
     const targetLabel = lk.site ? t.branchName : t.customer;
-    const targetValue = lk.site ? lk.site : (lk.customers.length <= 3 ? lk.customers.join('، ') : lk.customers.length + ' عملاء مختارين');
+    const targetValue = lk.site ? lk.site : (!lk.customers.length ? t.allCustomers : (lk.customers.length <= 3 ? lk.customers.join('، ') : lk.customers.length + ' عملاء مختارين'));
 
     // لو محددين شهر أو أكتر، الجدول بيتحول لعمود منفصل ملون لكل شهر (كمية/سعر/قيمة/عدد مرات شراء)
     // بدل الجدول المجمّع العادي - بنفس منطق العرض على الشاشة بالظبط.
@@ -3048,16 +3049,16 @@ table.datatable details summary:hover { text-decoration: underline; }
   window.exportCustomerItemsExcel = async function () {
     if (typeof ExcelJS === 'undefined') { alert('مكتبة تصدير الإكسل مش محمّلة - تأكد إن الجهاز متصل بالإنترنت وحاول تاني.'); return; }
     const lk = state.customerItemLookup;
-    if (!lk.customers.length && !lk.site) { alert('اختار عميل أو فرع من القائمة الأول.'); return; }
 
+    // lk.customers فاضية تعني "كل العملاء" (اختيار "الكل" صراحة) مش "مفيش اختيار"
     const baseRows = state.itemRows.filter(r =>
-      (lk.site ? r.site === lk.site : lk.customers.includes(r.customer)) &&
+      (lk.site ? r.site === lk.site : (!lk.customers.length || lk.customers.includes(r.customer))) &&
       (!lk.activity || r.activity === lk.activity) &&
       (!lk.branches.length || lk.branches.includes(r.branch)) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
-    const custSites = (!lk.site && lk.customers.length) ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))) : [];
+    const custSites = !lk.site ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))) : [];
     const lkRows = (custSites.length && lk.siteFilters.length) ? baseRows.filter(r => lk.siteFilters.includes(r.site)) : baseRows;
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
     const siteFiltersLabel = lk.siteFilters.length <= 3 ? lk.siteFilters.join('، ') : lk.siteFilters.length + ' فروع مختارة';
@@ -3074,7 +3075,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const itemCount = monthly ? monthly.orderedItems.length : byItemCust.length;
 
     const targetLabel = lk.site ? 'الفرع' : 'العميل';
-    const targetValue = lk.site ? lk.site : (lk.customers.length <= 3 ? lk.customers.join('، ') : lk.customers.length + ' عملاء مختارين');
+    const targetValue = lk.site ? lk.site : (!lk.customers.length ? 'كل العملاء' : (lk.customers.length <= 3 ? lk.customers.join('، ') : lk.customers.length + ' عملاء مختارين'));
     const yearsLabel = lk.years.length ? lk.years.join(', ') : 'كل السنوات';
     const monthsLabel = lk.months.length ? lk.months.map(m => MONTH_NAMES_AR[Number(m) - 1] || m).join(', ') : 'كل الشهور';
     const periodLabel = (!lk.years.length && !lk.months.length) ? 'كل الفترة المتاحة' : (yearsLabel + ' - ' + monthsLabel);
@@ -4843,16 +4844,19 @@ function renderItems() {
     const resultEl = el.querySelector('#custLookupResult');
     if (!resultEl) return;
     const lk = state.customerItemLookup;
-    if (!lk.customers.length && !lk.site) { resultEl.innerHTML = '<div class="pill-note">اختار عميل (أو أكتر) أو دور على فرع بالاسم من فوق الأول.</div>'; return; }
+    // lk.customers فاضية تعني "كل العملاء" (اختيار "الكل" صراحة من لوحة المربعات) مش "مفيش اختيار" -
+    // فبنعرض بيانات كل العملاء مجمّعة مع باقي الفلاتر (فرع الشركة/النشاط/السنة/الشهر) طالما مفيش فرع
+    // عميل محدد بالبحث المباشر (lk.site).
     const baseRows = state.itemRows.filter(r =>
-      (lk.site ? r.site === lk.site : lk.customers.includes(r.customer)) &&
+      (lk.site ? r.site === lk.site : (!lk.customers.length || lk.customers.includes(r.customer))) &&
       (!lk.activity || r.activity === lk.activity) &&
       (!lk.branches.length || lk.branches.includes(r.branch)) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
-    // لو اخترنا عميل أو أكتر (مش فرع بالبحث المباشر)، نجيب كل الفروع التابعة لهم عشان نعرضها في لوحة مربعات اختيار
-    const custSites = (!lk.site && lk.customers.length) ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar')) : [];
+    // لو مش دايرين على فرع بالبحث المباشر (سواء اخترنا عميل/عملاء أو "الكل")، نجيب كل الفروع الموجودة في
+    // النتيجة الحالية عشان نعرضها في لوحة مربعات اختيار إضافية
+    const custSites = !lk.site ? Array.from(new Set(baseRows.map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar')) : [];
     // فلترة siteFilters المحفوظة عشان لو اتغيرت قائمة الفروع (لما نغير العملاء المختارين) ما تفضلش قيم قديمة مش موجودة دلوقتي
     if (lk.siteFilters.length) lk.siteFilters = lk.siteFilters.filter(s => custSites.includes(s));
     const branchFilterHtml = custSites.length > 1 ? `
@@ -4865,8 +4869,8 @@ function renderItems() {
     if (!lkRows.length) {
       resultEl.innerHTML = branchFilterHtml + '<div class="pill-note">مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.</div>';
     } else {
-      const targetLabel = lk.site ? 'الفرع' : (lk.customers.length > 1 ? 'العملاء' : 'العميل');
-      const targetName = lk.site ? lk.site : (lk.customers.length <= 3 ? lk.customers.join('، ') : lk.customers.length + ' عملاء مختارين');
+      const targetLabel = lk.site ? 'الفرع' : (lk.customers.length === 1 ? 'العميل' : 'العملاء');
+      const targetName = lk.site ? lk.site : (!lk.customers.length ? 'كل العملاء' : (lk.customers.length <= 3 ? lk.customers.join('، ') : lk.customers.length + ' عملاء مختارين'));
       const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
       const companyBranchesLabel = lk.branches.length <= 3 ? lk.branches.join('، ') : lk.branches.length + ' فروع مختارة';
       const companyBranchNote = lk.branches.length ? ` (فرع الشركة: ${escapeHtml(companyBranchesLabel)})` : '';
