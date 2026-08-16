@@ -983,7 +983,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     indirectCustomerScope: 'discounted',  // 'discounted' = بس العملاء اللي عليهم خصم غير مباشر، 'all' = كل عملاء الفواتير حتى اللي مالهمش خصم خالص
     custHiddenCols: new Set(),  // مجموعات الأعمدة المخفية في جدول "كل العملاء" (يتحكم فيها اليوزر من دروب داون "أعمدة الجدول")
     branchIndirectSelectedBranches: [],  // تاب "توزيع الخصم على الفروع": الفروع المختارة للعرض بس ([] = عرض كل الفروع). الحساب نفسه دايمًا شامل كل الفروع بغض النظر عن الاختيار ده، عشان نسبة كل عميل تفضل صحيحة.
-    customerItemLookup: { customers: [], site: '', siteFilters: [], activity: '', branch: '', years: [], months: [], lang: 'ar', monthlyCols: ['qty', 'priceCarton', 'price', 'value', 'count', 'growth'] },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. customers = قائمة أسماء العملاء المختارين (اختيار متعدد بمربعات اختيار - يستبعد site والعكس)، site = فرع عميل مختار (يستبعد customers والعكس)، siteFilters = قائمة فروع مختارة من ضمن فروع العملاء المختارين (اختيار متعدد بمربعات اختيار)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان، branch = فرع الشركة (القاهرة/الإسكندرية...) بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان. monthlyCols = الأعمدة الظاهرة (كمية/سعر الكرتونة/سعر القطعة/قيمة/عدد مرات شراء/نسبة النمو) جوه كل مجموعة شهر في العرض الموزّع بالشهور
+    customerItemLookup: { customers: [], site: '', siteFilters: [], activity: '', branches: [], years: [], months: [], lang: 'ar', monthlyCols: ['qty', 'priceCarton', 'price', 'value', 'count', 'growth'] },  // أداة "أصناف عميل معين خلال فترة معينة" في تاب الأصناف - مستقلة تمامًا عن فلاتر الصفحة العلوية. customers = قائمة أسماء العملاء المختارين (اختيار متعدد بمربعات اختيار - يستبعد site والعكس)، site = فرع عميل مختار (يستبعد customers والعكس)، siteFilters = قائمة فروع مختارة من ضمن فروع العملاء المختارين (اختيار متعدد بمربعات اختيار)، activity بيضيّق قائمتي العميل/الفروع وبيتفلتر بيه النتائج كمان، branches = قائمة فروع الشركة المختارة (القاهرة/الإسكندرية...، اختيار متعدد بمربعات اختيار مع خيار "الكل") بتضيّق قائمتي العميل/الفروع وبتتفلتر بيها النتائج كمان. monthlyCols = الأعمدة الظاهرة (كمية/سعر الكرتونة/سعر القطعة/قيمة/عدد مرات شراء/نسبة النمو) جوه كل مجموعة شهر في العرض الموزّع بالشهور
     allItemsReport: { lang: 'ar' },  // زرار "تقرير شامل لكل الأصناف" في تاب الأصناف - يعرض جدول كل الأصناف (بالفلاتر الحالية) بنسبة كل صنف من إجمالي المبيعات
     repRoutes: new Map(),  // اسم الفرع (منظم) -> {route, group, branchName} - دليل خطوط سير المناديب (مجموعة/خط سير/فرع) من ملف "الفروع والعملاء"، محفوظ في السحابة
     repRoutesFilter: { group: '', route: '', search: '' },  // فلاتر تاب "خطوط سير مناديب" - مستقلة عن فلاتر الصفحة العلوية
@@ -2959,7 +2959,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const baseRows = state.itemRows.filter(r =>
       (lk.site ? r.site === lk.site : lk.customers.includes(r.customer)) &&
       (!lk.activity || r.activity === lk.activity) &&
-      (!lk.branch || r.branch === lk.branch) &&
+      (!lk.branches.length || lk.branches.includes(r.branch)) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
@@ -2969,6 +2969,7 @@ table.datatable details summary:hover { text-decoration: underline; }
 
     const sites = new Set(lkRows.map(r => r.site).filter(Boolean));
     const siteFiltersLabel = lk.siteFilters.length <= 3 ? lk.siteFilters.join('، ') : lk.siteFilters.length + ' فروع مختارة';
+    const companyBranchesLabel = lk.branches.length <= 3 ? lk.branches.join('، ') : lk.branches.length + ' فروع مختارة';
 
     const yearsLabel = lk.years.length ? lk.years.join(', ') : t.allYears;
     const monthsLabel = lk.months.length ? lk.months.map(m => t.months[Number(m) - 1] || m).join(', ') : t.allMonths;
@@ -3018,7 +3019,7 @@ table.datatable details summary:hover { text-decoration: underline; }
         <b>${targetLabel}:</b> ${escapeHtml(targetValue)} &nbsp;|&nbsp;
         ${(!lk.site && lk.siteFilters.length) ? `<b>${t.branchName}:</b> ${escapeHtml(siteFiltersLabel)} &nbsp;|&nbsp;` : ''}
         ${lk.activity ? `<b>${t.activityLabel}:</b> ${escapeHtml(lk.activity)} &nbsp;|&nbsp;` : ''}
-        ${lk.branch ? `<b>${t.companyBranchLabel}:</b> ${escapeHtml(lk.branch)} &nbsp;|&nbsp;` : ''}
+        ${lk.branches.length ? `<b>${t.companyBranchLabel}:</b> ${escapeHtml(companyBranchesLabel)} &nbsp;|&nbsp;` : ''}
         <b>${t.period}:</b> ${escapeHtml(periodLabel)} &nbsp;|&nbsp;
         <b>${t.branchCount}:</b> ${fmt(sites.size)} &nbsp;|&nbsp;
         <b>${t.itemCount}:</b> ${fmt(itemCount)}
@@ -3048,7 +3049,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const baseRows = state.itemRows.filter(r =>
       (lk.site ? r.site === lk.site : lk.customers.includes(r.customer)) &&
       (!lk.activity || r.activity === lk.activity) &&
-      (!lk.branch || r.branch === lk.branch) &&
+      (!lk.branches.length || lk.branches.includes(r.branch)) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
@@ -3056,6 +3057,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     const lkRows = (custSites.length && lk.siteFilters.length) ? baseRows.filter(r => lk.siteFilters.includes(r.site)) : baseRows;
     if (!lkRows.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
     const siteFiltersLabel = lk.siteFilters.length <= 3 ? lk.siteFilters.join('، ') : lk.siteFilters.length + ' فروع مختارة';
+    const companyBranchesLabel = lk.branches.length <= 3 ? lk.branches.join('، ') : lk.branches.length + ' فروع مختارة';
 
     const monthly = lk.months.length ? computeCustLookupMonthlyGroups(lkRows) : null;
     if (monthly && !monthly.groups.length) { alert('مفيش بيانات لهذا العميل/الفرع في الفترة المحددة.'); return; }
@@ -3114,7 +3116,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     ws.mergeCells('B3:' + colLetter(totalCols) + '3');
     const infoCell = ws.getCell('B3');
     const now = new Date();
-    infoCell.value = `${targetLabel}: ${targetValue}${(!lk.site && lk.siteFilters.length) ? ' | الفرع: ' + siteFiltersLabel : ''}${lk.activity ? ' | النشاط: ' + lk.activity : ''}${lk.branch ? ' | فرع الشركة: ' + lk.branch : ''} | الفترة: ${periodLabel} | تاريخ التصدير: ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    infoCell.value = `${targetLabel}: ${targetValue}${(!lk.site && lk.siteFilters.length) ? ' | الفرع: ' + siteFiltersLabel : ''}${lk.activity ? ' | النشاط: ' + lk.activity : ''}${lk.branches.length ? ' | فرع الشركة: ' + companyBranchesLabel : ''} | الفترة: ${periodLabel} | تاريخ التصدير: ${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
     infoCell.font = { size: 11, color: { argb: 'FF6B5647' } };
     infoCell.alignment = { horizontal: 'center' };
 
@@ -4702,15 +4704,14 @@ function renderItems() {
   // من كل بيانات الأصناف المرفوعة (state.itemRows بالكامل) بغض النظر عن أي فلتر شغال فوق الصفحة.
   // فلتر "النشاط" و"فرع الشركة" هنا (لو مختارين) بيضيّقوا قائمتي العملاء والفروع، وبيتفلتر بيهم كمان نتائج البحث نفسها.
   const lkActivity = state.customerItemLookup.activity;
-  const lkBranch = state.customerItemLookup.branch;
+  const lkBranches = state.customerItemLookup.branches;
   const activitiesForLookup = Array.from(new Set(state.itemRows.map(r => r.activity).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const activityOptionsHtml = activitiesForLookup.map(a => `<option value="${escapeHtml(a)}" ${a === lkActivity ? 'selected' : ''}>${escapeHtml(a)}</option>`).join('');
-  // قائمة فروع الشركة (القاهرة/الإسكندرية...) - مش فروع العميل، ده فرع الشركة اللي باع منه
+  // قائمة فروع الشركة (القاهرة/الإسكندرية...) - مش فروع العميل، ده فرع الشركة اللي باع منه. اختيار متعدد بمربعات اختيار مع خيار "الكل"
   const companyBranchesForLookup = Array.from(new Set(state.itemRows.filter(r => !lkActivity || r.activity === lkActivity).map(r => r.branch).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
-  const companyBranchOptionsHtml = companyBranchesForLookup.map(b => `<option value="${escapeHtml(b)}" ${b === lkBranch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('');
-  const custNamesForLookup = Array.from(new Set(state.itemRows.filter(r => (!lkActivity || r.activity === lkActivity) && (!lkBranch || r.branch === lkBranch)).map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const custNamesForLookup = Array.from(new Set(state.itemRows.filter(r => (!lkActivity || r.activity === lkActivity) && (!lkBranches.length || lkBranches.includes(r.branch))).map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   // قائمة بحث "فروع العملاء" (فرع_العميل) - مستقلة جنب قائمة العميل، اختيار فرع منها يستبعد اختيار العميل والعكس
-  const sitesForLookup = Array.from(new Set(state.itemRows.filter(r => (!lkActivity || r.activity === lkActivity) && (!lkBranch || r.branch === lkBranch)).map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const sitesForLookup = Array.from(new Set(state.itemRows.filter(r => (!lkActivity || r.activity === lkActivity) && (!lkBranches.length || lkBranches.includes(r.branch))).map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const siteOptionsHtml = sitesForLookup.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
 
   el.innerHTML = `
@@ -4767,12 +4768,9 @@ function renderItems() {
             ${activityOptionsHtml}
           </select>
         </div>
-        <div>
-          <div class="hint" style="margin:0 0 4px;">فرع الشركة</div>
-          <select id="custLookupBranchSelect" style="min-width:160px; font-family:inherit; padding:8px; border-radius:8px; border:1.5px solid var(--sand-dark);">
-            <option value="">-- كل الفروع --</option>
-            ${companyBranchOptionsHtml}
-          </select>
+        <div class="msfilter" style="display:inline-block;">
+          <button type="button" class="ms-btn" id="custLookupCompanyBranchBtn">فرع الشركة: الكل ▾</button>
+          <div class="ms-panel" id="custLookupCompanyBranchPanel"></div>
         </div>
         <div class="msfilter" style="display:inline-block;">
           <button type="button" class="ms-btn" id="custLookupCustomerBtn">العميل: الكل ▾</button>
@@ -4845,7 +4843,7 @@ function renderItems() {
     const baseRows = state.itemRows.filter(r =>
       (lk.site ? r.site === lk.site : lk.customers.includes(r.customer)) &&
       (!lk.activity || r.activity === lk.activity) &&
-      (!lk.branch || r.branch === lk.branch) &&
+      (!lk.branches.length || lk.branches.includes(r.branch)) &&
       (!lk.years.length || lk.years.includes(String(r.year))) &&
       (!lk.months.length || lk.months.includes(String(r.monthNum)))
     );
@@ -4866,7 +4864,8 @@ function renderItems() {
       const targetLabel = lk.site ? 'الفرع' : (lk.customers.length > 1 ? 'العملاء' : 'العميل');
       const targetName = lk.site ? lk.site : (lk.customers.length <= 3 ? lk.customers.join('، ') : lk.customers.length + ' عملاء مختارين');
       const activityNote = lk.activity ? ` (نشاط: ${escapeHtml(lk.activity)})` : '';
-      const companyBranchNote = lk.branch ? ` (فرع الشركة: ${escapeHtml(lk.branch)})` : '';
+      const companyBranchesLabel = lk.branches.length <= 3 ? lk.branches.join('، ') : lk.branches.length + ' فروع مختارة';
+      const companyBranchNote = lk.branches.length ? ` (فرع الشركة: ${escapeHtml(companyBranchesLabel)})` : '';
       const siteFiltersLabel = lk.siteFilters.length <= 3 ? lk.siteFilters.join('، ') : lk.siteFilters.length + ' فروع مختارة';
       const branchNote = lk.siteFilters.length ? ` - فرع: ${escapeHtml(siteFiltersLabel)}` : '';
 
@@ -4963,17 +4962,17 @@ function renderItems() {
       renderItems();
     });
   }
-  const custBranchSelect = el.querySelector('#custLookupBranchSelect');
-  if (custBranchSelect) {
-    custBranchSelect.addEventListener('change', () => {
-      // نفس منطق تغيير النشاط: تغيير فرع الشركة بيضيّق قوائم العميل/فرع العميل، فبنصفّر الاختيار الحالي
-      state.customerItemLookup.branch = custBranchSelect.value;
+  // لوحة اختيار فرع الشركة (مربعات اختيار متعددة مع خيار "الكل") - نفس منطق تغيير النشاط: أي تغيير هنا
+  // بيضيّق قوائم العميل/فرع العميل، فبنصفّر الاختيار الحالي ونعيد بناء الكارت بالكامل
+  wireLocalMultiSelect(
+    el.querySelector('#custLookupCompanyBranchBtn'), el.querySelector('#custLookupCompanyBranchPanel'),
+    companyBranchesForLookup, state.customerItemLookup.branches, v => v, 'فرع الشركة', () => {
       state.customerItemLookup.customers = [];
       state.customerItemLookup.site = '';
       state.customerItemLookup.siteFilters = [];
       renderItems();
-    });
-  }
+    }
+  );
   const custSiteInput = el.querySelector('#custLookupSiteInput');
   if (custSiteInput) {
     custSiteInput.addEventListener('input', () => {
