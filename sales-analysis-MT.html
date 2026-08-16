@@ -2574,15 +2574,17 @@ table.datatable details summary:hover { text-decoration: underline; }
     const nSub = activeDefs.length || 1;
 
     // عمود ثابت (مش جوه أي مجموعة شهر) بيعرض آخر سعر قطعة فعلي للصنف بغض النظر عن الشهر/السنة
-    // المختارة - عشان تقدر تقارن سعر الشهر المفلتر (2025 مثلاً) بالسعر الحالي فعليًا (لو 2026 مثلاً)
+    // المختارة - عشان تقدر تقارن سعر الشهر المفلتر (2025 مثلاً) بالسعر الحالي فعليًا (لو 2026 مثلاً).
+    // السنة الحالية بتتحط في عنوان العمود نفسه (مش جنب كل سعر في الجدول).
     const currentPriceMap = opts.currentPriceMap || new Map();
+    const currentPriceColLabel = `${t.currentPiecePrice} ${new Date().getFullYear()}`;
 
     let headRow1 = `<th rowspan="2">${t.itemCode}</th><th rowspan="2">${t.item}</th><th rowspan="2">${t.category}</th>`;
     groups.forEach((g, idx) => {
       const c = colorAt(idx);
       headRow1 += `<th colspan="${nSub}" style="background:${c.head}; color:${c.headText};">${monthNames[g.month - 1]} ${g.year}</th>`;
     });
-    headRow1 += `<th rowspan="2">${t.currentPiecePrice}</th><th rowspan="2">${t.total}</th>`;
+    headRow1 += `<th rowspan="2">${escapeHtml(currentPriceColLabel)}</th><th rowspan="2">${t.total}</th>`;
 
     let headRow2 = '';
     groups.forEach((g, idx) => {
@@ -2611,7 +2613,7 @@ table.datatable details summary:hover { text-decoration: underline; }
         });
       });
       const cp = currentPriceMap.get(item);
-      const cpDisp = (cp && cp.price) ? `${fmt(cp.price, 2)}${cp.date ? ' (' + new Date(cp.date).getFullYear() + ')' : ''}` : '-';
+      const cpDisp = (cp && cp.price) ? fmt(cp.price, 2) : '-';
       cells += `<td>${cpDisp}</td>`;
       cells += `<td><b>${fmtMoney(rowTotal)}</b></td>`;
       bodyRows += `<tr>${cells}</tr>`;
@@ -3166,7 +3168,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       headerRow1.getCell(1).value = 'كود الصنف';
       headerRow1.getCell(2).value = 'الصنف';
       headerRow1.getCell(3).value = 'التصنيف';
-      headerRow1.getCell(currentPriceCol).value = 'سعر القطعة الآن (آخر توريد فعلي)';
+      headerRow1.getCell(currentPriceCol).value = 'سعر القطعة الآن (آخر توريد فعلي) ' + new Date().getFullYear();
       headerRow1.getCell(totalCols).value = 'إجمالي القيمة';
       [1, 2, 3, currentPriceCol, totalCols].forEach(c => {
         ws.mergeCells(headerRow1.number, c, headerRow2.number, c);
@@ -3215,8 +3217,8 @@ table.datatable details summary:hover { text-decoration: underline; }
         const cp = currentPriceMap ? currentPriceMap.get(item) : null;
         if (cp && cp.price) {
           const cpCell = row.getCell(currentPriceCol);
-          cpCell.value = cp.date ? `${cp.price.toFixed(2)} (${new Date(cp.date).getFullYear()})` : cp.price;
-          if (!cp.date) cpCell.numFmt = '#,##0.00';
+          cpCell.value = cp.price;
+          cpCell.numFmt = '#,##0.00';
         }
         row.getCell(totalCols).value = rowTotal;
         row.getCell(totalCols).numFmt = '#,##0';
