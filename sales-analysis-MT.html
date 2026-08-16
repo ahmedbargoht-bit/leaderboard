@@ -2745,16 +2745,16 @@ table.datatable details summary:hover { text-decoration: underline; }
   function wireLocalMultiSelect(btn, panel, values, selectedArr, labelFn, titlePrefix, onChange) {
     if (!panel || !btn) return;
     const toLabel = labelFn || (v => v);
-    // "الكل" = selectedArr فاضية (يعني مفيش فلتر، كل القيم داخلة) - في الحالة دي بنعلّم كل مربعات
-    // الاختيار الفردية كمان بصريًا (مش بس مربع "الكل") عشان يكون واضح إن كل القيم متضمنة فعلاً.
-    const allMode = selectedArr.length === 0;
+    // القائمة بتفتح فاضية (من غير ما تعلّم على أي عنصر فردي) لما selectedArr تبقى فاضية (يعني "الكل") -
+    // عشان يقدر اليوزر يحدد أي عنصر بنفسه على طول من غير ما يلغي تحديد باقي العناصر الأول. مربع "الكل"
+    // نفسه بس هو اللي بيتعلّم في الحالة دي، وضغطه بالإيد صراحة هو اللي بيعلّم كل المربعات الفردية.
     panel.innerHTML =
       `<label class="ms-item ms-all"><input type="checkbox" class="ms-all-cb"><span>الكل</span></label>
        <div class="ms-sep"></div>` +
-      values.map(v => `<label class="ms-item"><input type="checkbox" value="${String(v)}" ${(allMode || selectedArr.includes(String(v))) ? 'checked' : ''}><span>${toLabel(v)}</span></label>`).join('');
+      values.map(v => `<label class="ms-item"><input type="checkbox" value="${String(v)}" ${selectedArr.includes(String(v)) ? 'checked' : ''}><span>${toLabel(v)}</span></label>`).join('');
 
     const allCb = panel.querySelector('.ms-all-cb');
-    allCb.checked = allMode;
+    allCb.checked = selectedArr.length === 0;
     const setLabel = () => {
       let label;
       if (selectedArr.length === 0) label = titlePrefix + ': الكل';
@@ -2764,6 +2764,7 @@ table.datatable details summary:hover { text-decoration: underline; }
     };
     allCb.addEventListener('change', () => {
       selectedArr.length = 0;
+      // لو دوس على "الكل" بنفسه صراحة، بنعلّم كل المربعات الفردية بصريًا كمان (تأكيد إن الكل داخل الفلتر)
       panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => cb.checked = true);
       allCb.checked = true;
       setLabel();
@@ -2771,21 +2772,10 @@ table.datatable details summary:hover { text-decoration: underline; }
     });
     panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => {
       cb.addEventListener('change', () => {
-        // لو كنا في وضع "الكل" (selectedArr فاضية) ولسه لقينا مربع اتلغى تحديده، لازم نحول selectedArr
-        // لقائمة صريحة فيها كل القيم ما عدا اللي اتلغى - عشان يفضل شكل المربعات متوافق مع الفلتر الفعلي.
-        if (selectedArr.length === 0 && !cb.checked) {
-          selectedArr.push(...values.map(String).filter(v => v !== cb.value));
-        } else {
-          const sel = new Set(selectedArr);
-          if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
-          selectedArr.length = 0; selectedArr.push(...sel);
-        }
-        // لو بقت كل القيم متحددة صراحة، ده معناه "الكل" - نرجعها فاضية عشان يفضل السلوك متسق
-        if (selectedArr.length === values.length) selectedArr.length = 0;
+        const sel = new Set(selectedArr);
+        if (cb.checked) sel.add(cb.value); else sel.delete(cb.value);
+        selectedArr.length = 0; selectedArr.push(...sel);
         allCb.checked = selectedArr.length === 0;
-        if (selectedArr.length === 0) {
-          panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(c => c.checked = true);
-        }
         setLabel();
         onChange();
       });
