@@ -4632,6 +4632,7 @@ function renderItems() {
     return `<span class="item-code-missing" data-item="${escapeHtml(itemName)}" style="white-space:nowrap;">
       <input type="text" class="item-code-input" placeholder="كود؟" style="width:60px; font-family:inherit; padding:4px 6px; border-radius:6px; border:1.5px solid var(--bad);">
       <button type="button" class="btn secondary item-code-save-btn" style="padding:4px 8px; font-size:11px;">حفظ</button>
+      <button type="button" class="btn secondary item-code-merge-btn" style="padding:4px 8px; font-size:11px;" title="ضيف الصنف ده لتاب دمج الأصناف">🔗 دمج</button>
     </span>`;
   };
   const missingCodeItems = byItemValue.filter(x => !resolveItemCode(x.key));
@@ -4694,11 +4695,13 @@ function renderItems() {
 
   // أداة "أصناف عميل معين خلال فترة معينة" - مستقلة تمامًا عن فلاتر الصفحة العلوية، وبتاخد بياناتها
   // من كل بيانات الأصناف المرفوعة (state.itemRows بالكامل) بغض النظر عن أي فلتر شغال فوق الصفحة.
+  // فلتر "النشاط" هنا (لو مختار) بيضيّق قائمتي العملاء والفروع، وبيتفلتر بيه كمان نتائج البحث نفسها.
   const lkActivity = state.customerItemLookup.activity;
   const activitiesForLookup = Array.from(new Set(state.itemRows.map(r => r.activity).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const activityOptionsHtml = activitiesForLookup.map(a => `<option value="${escapeHtml(a)}" ${a === lkActivity ? 'selected' : ''}>${escapeHtml(a)}</option>`).join('');
   const custNamesForLookup = Array.from(new Set(state.itemRows.filter(r => !lkActivity || r.activity === lkActivity).map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const custOptionsHtml = custNamesForLookup.map(c => `<option value="${escapeHtml(c)}" ${c === state.customerItemLookup.customer ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+  // قائمة بحث "فروع العملاء" (فرع_العميل) - مستقلة جنب قائمة العميل، اختيار فرع منها يستبعد اختيار العميل والعكس
   const sitesForLookup = Array.from(new Set(state.itemRows.filter(r => !lkActivity || r.activity === lkActivity).map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const siteOptionsHtml = sitesForLookup.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
 
@@ -4803,6 +4806,21 @@ function renderItems() {
       if (!code) { alert('اكتب الكود الأول'); return; }
       btn.disabled = true; btn.textContent = '...';
       await assignItemCode(itemName, code, null);
+    });
+  });
+
+  // زرار "🔗 دمج" جنب أي صنف من غير كود - بيضيفه على طول لقايمة الاختيار في تاب "دمج الأصناف" وينقلك هناك
+  // عشان تقدر تدمجه بسرعة مع صنف تاني بمسمى مختلف (بدل ما تدور عليه من الأول في تاب الدمج)
+  el.querySelectorAll('.item-code-merge-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const wrap = btn.closest('.item-code-missing');
+      const itemName = wrap.dataset.item;
+      if (!state.itemMergeSelection.includes(itemName)) {
+        state.itemMergeSelection.push(itemName);
+      }
+      renderItemMerge();
+      const mergeTabBtn = document.querySelector('.tabbtn[data-tab="panel-itemmerge"]');
+      if (mergeTabBtn) mergeTabBtn.click();
     });
   });
 
@@ -4940,6 +4958,7 @@ function renderItems() {
   const custActivitySelect = el.querySelector('#custLookupActivitySelect');
   if (custActivitySelect) {
     custActivitySelect.addEventListener('change', () => {
+      // تغيير النشاط بيضيّق قوائم العميل/الفرع، فبنصفّر الاختيار الحالي ونعيد بناء الكارت بالكامل
       state.customerItemLookup.activity = custActivitySelect.value;
       state.customerItemLookup.customer = '';
       state.customerItemLookup.site = '';
