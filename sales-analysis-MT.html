@@ -2771,6 +2771,11 @@ table.datatable details summary:hover { text-decoration: underline; }
       else label = titlePrefix + ': ' + selectedArr.length + ' محدد من ' + values.length;
       btn.textContent = label + ' ▾';
     };
+    // panel.id ثابت حتى لو onChange عمل renderItems() كامل (زي فلاتر النشاط/فرع الشركة/السنة/الشهر اللي
+    // بتضيّق قوائم تانية) - بنستخدمه عشان نلاقي النسخة الجديدة من نفس البانل بعد إعادة البناء ونفتحها
+    // تاني، عشان القائمة تفضل ظاهرة لليوزر وهو بيختار أكتر من قيمة من غير ما تقفل بعد كل اختيار.
+    const panelId = panel.id;
+    const reopenPanel = () => { if (panelId) { const p = document.getElementById(panelId); if (p) p.classList.add('open'); } };
     allCb.addEventListener('change', () => {
       selectedArr.length = 0;
       // لو دوس على "الكل" بنفسه صراحة، بنعلّم كل المربعات الفردية بصريًا كمان (تأكيد إن الكل داخل الفلتر)
@@ -2778,6 +2783,7 @@ table.datatable details summary:hover { text-decoration: underline; }
       allCb.checked = true;
       setLabel();
       onChange();
+      reopenPanel();
     });
     panel.querySelectorAll('input[type=checkbox]:not(.ms-all-cb)').forEach(cb => {
       cb.addEventListener('change', () => {
@@ -2787,6 +2793,7 @@ table.datatable details summary:hover { text-decoration: underline; }
         allCb.checked = selectedArr.length === 0;
         setLabel();
         onChange();
+        reopenPanel();
       });
     });
     setLabel();
@@ -4769,12 +4776,31 @@ function renderItems() {
   // فلتر "النشاط" و"فرع الشركة" هنا (لو مختارين) بيضيّقوا قائمتي العملاء والفروع، وبيتفلتر بيهم كمان نتائج البحث نفسها.
   const lkActivities = state.customerItemLookup.activities;
   const lkBranches = state.customerItemLookup.branches;
+  const lkYears = state.customerItemLookup.years;
+  const lkMonths = state.customerItemLookup.months;
   const activitiesForLookup = Array.from(new Set(state.itemRows.map(r => r.activity).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   // قائمة فروع الشركة (القاهرة/الإسكندرية...) - مش فروع العميل، ده فرع الشركة اللي باع منه. اختيار متعدد بمربعات اختيار مع خيار "الكل"
   const companyBranchesForLookup = Array.from(new Set(state.itemRows.filter(r => !lkActivities.length || lkActivities.includes(r.activity)).map(r => r.branch).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
-  const custNamesForLookup = Array.from(new Set(state.itemRows.filter(r => (!lkActivities.length || lkActivities.includes(r.activity)) && (!lkBranches.length || lkBranches.includes(r.branch))).map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  // قائمتي العميل وفرع العميل هنا بيتفلتروا كمان بفلتر السنة/الشهر (لو محددين) - عشان القائمة المنسدلة
+  // تعرض بس العملاء اللي عندهم فعليًا بيانات في الفترة المختارة، مش كل عملاء النشاط/الفرع بغض النظر عن الفترة.
+  const custNamesForLookup = Array.from(new Set(state.itemRows.filter(r =>
+    (!lkActivities.length || lkActivities.includes(r.activity)) &&
+    (!lkBranches.length || lkBranches.includes(r.branch)) &&
+    (!lkYears.length || lkYears.includes(String(r.year))) &&
+    (!lkMonths.length || lkMonths.includes(String(r.monthNum)))
+  ).map(r => r.customer).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  // لو فيه عملاء متحددين قبل كده بقوا مش موجودين في القائمة المضيّقة الجديدة (بعد تغيير فلتر السنة/الشهر
+  // مثلًا)، بنشيلهم تلقائيًا من الاختيار بدل ما يفضلوا "متحددين" ظاهريًا من غير ما يظهروا كمربع في اللوحة.
+  if (state.customerItemLookup.customers.length) {
+    state.customerItemLookup.customers = state.customerItemLookup.customers.filter(c => custNamesForLookup.includes(c));
+  }
   // قائمة بحث "فروع العملاء" (فرع_العميل) - مستقلة جنب قائمة العميل، اختيار فرع منها يستبعد اختيار العميل والعكس
-  const sitesForLookup = Array.from(new Set(state.itemRows.filter(r => (!lkActivities.length || lkActivities.includes(r.activity)) && (!lkBranches.length || lkBranches.includes(r.branch))).map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
+  const sitesForLookup = Array.from(new Set(state.itemRows.filter(r =>
+    (!lkActivities.length || lkActivities.includes(r.activity)) &&
+    (!lkBranches.length || lkBranches.includes(r.branch)) &&
+    (!lkYears.length || lkYears.includes(String(r.year))) &&
+    (!lkMonths.length || lkMonths.includes(String(r.monthNum)))
+  ).map(r => r.site).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b), 'ar'));
   const siteOptionsHtml = sitesForLookup.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
 
   el.innerHTML = `
@@ -5107,13 +5133,15 @@ function renderItems() {
   );
   const custYearsForLookup = Array.from(new Set(state.itemRows.map(r => r.year))).filter(Boolean).sort((a, b) => a - b).map(String);
   const custMonthsForLookup = Array.from({ length: 12 }, (_, i) => String(i + 1));
+  // تغيير السنة/الشهر بيضيّق قائمة العملاء المعروضة في اللوحة (بس عملاء الفترة دي)، فبنعيد بناء الكارت
+  // كله (renderItems) بدل تحديث نتيجة البحث بس، عشان لوحة العميل تتحدث بقائمة العملاء الصح.
   wireLocalMultiSelect(
     el.querySelector('#custLookupYearBtn'), el.querySelector('#custLookupYearPanel'),
-    custYearsForLookup, state.customerItemLookup.years, v => v, 'السنة', renderCustLookupResult
+    custYearsForLookup, state.customerItemLookup.years, v => v, 'السنة', renderItems
   );
   wireLocalMultiSelect(
     el.querySelector('#custLookupMonthBtn'), el.querySelector('#custLookupMonthPanel'),
-    custMonthsForLookup, state.customerItemLookup.months, v => MONTH_NAMES_AR[Number(v) - 1] || v, 'الشهر', renderCustLookupResult
+    custMonthsForLookup, state.customerItemLookup.months, v => MONTH_NAMES_AR[Number(v) - 1] || v, 'الشهر', renderItems
   );
   wireMsToggle(el);
   renderCustLookupResult();
